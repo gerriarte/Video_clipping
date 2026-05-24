@@ -38,7 +38,8 @@ def download_video(
         "--convert-subs", "vtt",
         "--no-playlist",
         "--js-runtimes", "node",
-        "--newline",          # una línea por actualización de progreso
+        "--remote-components", "ejs:github",
+        "--newline",
         "--output", template,
         url,
     ]
@@ -70,7 +71,7 @@ def _get_metadata(
 ) -> dict:
     if progress_fn:
         progress_fn("Obteniendo metadatos del video...")
-    cmd = _YT_DLP + ["--dump-json", "--no-playlist", "--js-runtimes", "node", url]
+    cmd = _YT_DLP + ["--dump-json", "--no-playlist", "--js-runtimes", "node", "--remote-components", "ejs:github", url]
     result = subprocess.run(
         cmd, capture_output=True, text=True, encoding="utf-8", errors="replace"
     )
