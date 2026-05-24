@@ -23,6 +23,12 @@ build/
 remotion/node_modules/
 remotion/out/
 
+# Generated outputs
+*.csv
+
+# Legacy scripts
+script.py
+
 # OS
 .DS_Store
 Thumbs.db
