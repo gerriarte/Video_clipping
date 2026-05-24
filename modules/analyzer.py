@@ -103,6 +103,7 @@ def identify_clips(
     min_seconds: int | None = None,
     max_seconds: int | None = None,
     channel_context: str | None = None,
+    excluded_ranges: list[tuple[float, float]] | None = None,
 ) -> list[dict]:
     """
     Envía el transcript a Claude y obtiene los mejores momentos para clip.
@@ -139,12 +140,24 @@ def identify_clips(
         sampled = [lines[int(i * step)] for i in range(target)]
         transcript_text = "\n".join(sampled) + "\n\n[Transcript muestreado — cubre el video completo]"
 
+    excluded_block = ""
+    if excluded_ranges:
+        zones = "\n".join(
+            f"  - {_seconds_to_timestamp(s)} → {_seconds_to_timestamp(e)}"
+            for s, e in excluded_ranges
+        )
+        excluded_block = f"""
+ZONAS YA PROCESADAS — NO las uses ni te solapés con ellas:
+{zones}
+Buscá clips ÚNICAMENTE en los intervalos de tiempo que quedan fuera de estas zonas.
+"""
+
     ctx = channel_context or config.ZUMO_CONTEXT
     prompt = f"""{ctx}
 
 Tenés el siguiente transcript del video "{video_title}" con timestamps en formato [HH:MM:SS.mmm].
 Tu tarea es identificar los {request_n} mejores fragmentos para clips virales en TikTok/Instagram/YouTube Shorts.
-
+{excluded_block}
 REGLAS ESTRICTAS:
 - Debés devolver EXACTAMENTE {request_n} clips, ni más ni menos
 - Cada clip debe durar entre {min_secs} y {max_secs} segundos
