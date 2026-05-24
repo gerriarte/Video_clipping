@@ -1,0 +1,24 @@
+{
+  "name": "zumo-remotion",
+  "version": "1.0.0",
+  "description": "Remotion compositions para Zumo Streaming clips",
+  "scripts": {
+    "start": "npx remotion studio",
+    "build": "npx remotion render ClipComposition out/clip.mp4",
+    "render": "npx remotion render"
+  },
+  "dependencies": {
+    "@remotion/bundler": "^4.0.465",
+    "@remotion/cli": "^4.0.465",
+    "@remotion/media-utils": "^4.0.0",
+    "@remotion/renderer": "^4.0.465",
+    "remotion": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.0.0",
+    "typescript": "^5.0.0"
+  },
+  "remotion": {
+    "entrypoint": "src/index.ts"
+  }
+}
