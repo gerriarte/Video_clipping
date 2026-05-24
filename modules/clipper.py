@@ -77,15 +77,17 @@ def cut_clips(
     clips_dir: Path,
     video_id: str,
     progress_fn: Callable[[str], None] | None = None,
+    start_index: int = 1,
 ) -> list[dict]:
     """Corta todos los clips y retorna la lista enriquecida con clip_path."""
     results = []
-    for i, clip in enumerate(clips, 1):
+    for i, clip in enumerate(clips, start_index):
         name        = _clip_filename(clip.get("title", f"Clip {i}"), i)
         output_path = clips_dir / f"{name}.mp4"
         dur         = clip["end"] - clip["start"]
 
-        def _progress(line, idx=i, total=len(clips)):
+        total_display = start_index + len(clips) - 1
+        def _progress(line, idx=i, total=total_display):
             if progress_fn:
                 progress_fn(f"[{idx}/{total}] {line}")
 

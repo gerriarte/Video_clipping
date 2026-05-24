@@ -116,8 +116,9 @@ DEFAULTS = {
     "ch_desc":         "Canal de YouTube sobre Negocios, Tecnología, Marketing y temas afines. Orientado a profesionales y empresas latinoamericanas.",
     "ch_hosts":        _ZUMO_HOSTS,
     "ch_tone":         "Relajado pero profesional, con insights accionables para emprendedores.",
-    "clips_editor_rev": 0,   # se incrementa al agregar clips para forzar re-render
-    "last_dur_range":   (config.MIN_CLIP_SECONDS, config.MAX_CLIP_SECONDS),
+    "clips_editor_rev":    0,
+    "last_dur_range":      (config.MIN_CLIP_SECONDS, config.MAX_CLIP_SECONDS),
+    "extra_clips_pending": [],   # clips encontrados por "Buscar más", aún sin cortar
 }
 # Cargar estado persistido solo la primera vez en esta sesión
 if "stage" not in st.session_state:
@@ -137,7 +138,7 @@ def go_back():
     """Retrocede un paso conservando los datos del paso anterior."""
     transitions = {
         "analyzed": ("downloaded", {"clips": [], "clipped": [], "final_clips": []}),
-        "clipped":  ("analyzed",   {"clipped": [], "final_clips": []}),
+        "clipped":  ("analyzed",   {"clipped": [], "final_clips": [], "extra_clips_pending": []}),
         "captioned":("clipped",    {"final_clips": []}),
     }
     prev_stage, clear_keys = transitions.get(st.session_state.stage, (None, {}))
@@ -475,38 +476,6 @@ if st.session_state.stage == "analyzed":
     st.info(f"**{n_sel} de {total_clips} clips seleccionados** para cortar"
             + ("" if n_sel else " — seleccioná al menos uno para continuar"))
 
-    # ── Buscar más clips ──────────────────────────────────────────────────────
-    with st.expander("➕ Buscar más clips"):
-        st.caption("Claude buscará clips nuevos evitando los rangos de tiempo ya identificados.")
-        extra_n = st.number_input(
-            "Clips adicionales a buscar",
-            min_value=1, max_value=20, value=5,
-            key="extra_clips_n",
-        )
-        if st.button("🔍 Buscar más clips", key="btn_more_clips"):
-            excluded = [(c["start"], c["end"]) for c in st.session_state.clips]
-            with st.status("Buscando más clips…", expanded=True) as s:
-                st.write(f"Claude buscando {extra_n} clips en las zonas no usadas…")
-                try:
-                    dr = st.session_state.last_dur_range
-                    new_clips = identify_clips(
-                        st.session_state.cues,
-                        st.session_state.video_info["title"],
-                        target_clips=int(extra_n),
-                        min_seconds=dr[0],
-                        max_seconds=dr[1],
-                        channel_context=build_channel_context(),
-                        excluded_ranges=excluded,
-                    )
-                    st.session_state.clips += new_clips
-                    st.session_state.clips_editor_rev += 1
-                    save_state()
-                    s.update(label=f"✅ {len(new_clips)} clips nuevos agregados", state="complete")
-                    st.rerun()
-                except Exception as e:
-                    s.update(label="❌ Error al buscar más clips", state="error")
-                    st.session_state["_last_error"] = f"Error: {e}"
-
     if st.button(
         "✂️ Cortar clips con ffmpeg", type="primary", disabled=len(approved) == 0
     ):
@@ -558,6 +527,105 @@ if st.session_state.stage == "clipped":
                 st.video(str(clip["clip_path"]))
             m, s_ = divmod(int(clip["end"] - clip["start"]), 60)
             st.caption(f"_{clip['type']} · {m}:{s_:02d}_")
+
+    st.divider()
+
+    # ── Buscar más clips ──────────────────────────────────────────────────────
+    with st.expander("➕ Buscar más clips"):
+        st.caption("Claude identificará clips nuevos en las partes del video aún no usadas.")
+        extra_n = st.number_input(
+            "Clips adicionales a identificar",
+            min_value=1, max_value=20, value=5,
+            key="extra_clips_n",
+        )
+        if st.button("🔍 Buscar más clips", key="btn_more_clips"):
+            excluded = [(c["start"], c["end"]) for c in st.session_state.clipped]
+            with st.status("Buscando más clips…", expanded=True) as s:
+                st.write(f"Claude buscando {int(extra_n)} clips en las zonas no usadas…")
+                try:
+                    dr = st.session_state.last_dur_range
+                    new_clips = identify_clips(
+                        st.session_state.cues,
+                        st.session_state.video_info["title"],
+                        target_clips=int(extra_n),
+                        min_seconds=dr[0],
+                        max_seconds=dr[1],
+                        channel_context=build_channel_context(),
+                        excluded_ranges=excluded,
+                    )
+                    st.session_state.extra_clips_pending = new_clips
+                    save_state()
+                    s.update(label=f"✅ {len(new_clips)} clips encontrados — revisalos abajo", state="complete")
+                    st.rerun()
+                except Exception as e:
+                    s.update(label="❌ Error al buscar clips", state="error")
+                    st.session_state["_last_error"] = f"Error: {e}"
+
+        if st.session_state.extra_clips_pending:
+            pending = st.session_state.extra_clips_pending
+            st.markdown(f"**{len(pending)} clips nuevos** — seleccioná cuáles cortar:")
+            extra_df = st.data_editor(
+                clips_to_df(pending),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "✓":       st.column_config.CheckboxColumn("Cortar", width="small"),
+                    "Título":  st.column_config.TextColumn(width="large"),
+                    "Formato": st.column_config.SelectboxColumn(
+                        "Formato",
+                        options=["9:16 vertical", "Original 16:9"],
+                        width="medium",
+                        required=True,
+                    ),
+                    "Inicio":  st.column_config.NumberColumn("Inicio (s)", format="%.1f", step=0.5),
+                    "Fin":     st.column_config.NumberColumn("Fin (s)",    format="%.1f", step=0.5),
+                    "Dur(s)":  st.column_config.NumberColumn("Duración", disabled=True),
+                    "Tipo":    st.column_config.SelectboxColumn(
+                        options=["insight", "advice", "humor", "stat", "story"]
+                    ),
+                    "Razón":   st.column_config.TextColumn(width="large"),
+                },
+                key="extra_clips_editor",
+            )
+            extra_approved = df_to_clips(extra_df, pending)
+
+            col_cut, col_cancel = st.columns([2, 1])
+            if col_cut.button(
+                f"✂️ Cortar {len(extra_approved)} clips adicionales",
+                type="primary",
+                disabled=len(extra_approved) == 0,
+                key="btn_cut_extra",
+            ):
+                with st.status("Cortando clips adicionales…", expanded=True) as s:
+                    log_box = st.empty()
+                    try:
+                        next_idx = max((c["index"] for c in st.session_state.clipped), default=0) + 1
+                        extra_clipped = cut_clips(
+                            st.session_state.video_info["video_path"],
+                            extra_approved,
+                            config.CLIPS_DIR,
+                            st.session_state.video_info["video_id"],
+                            progress_fn=make_live_logger(log_box),
+                            start_index=next_idx,
+                        )
+                        for clip in extra_clipped:
+                            clip["subtitles"] = get_cues_for_clip(
+                                st.session_state.cues, clip["start"], clip["end"]
+                            )
+                        log_box.empty()
+                        st.session_state.clipped += extra_clipped
+                        st.session_state.extra_clips_pending = []
+                        save_state()
+                        s.update(label=f"✅ {len(extra_clipped)} clips cortados y agregados", state="complete")
+                        st.rerun()
+                    except Exception as e:
+                        log_box.empty()
+                        s.update(label="❌ Error al cortar", state="error")
+                        st.session_state["_last_error"] = str(e)
+
+            if col_cancel.button("✕ Descartar", key="btn_cancel_extra"):
+                st.session_state.extra_clips_pending = []
+                st.rerun()
 
     st.divider()
 
