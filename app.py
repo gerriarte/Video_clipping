@@ -9,6 +9,7 @@ import io
 import json
 import os
 import sys
+import traceback
 from pathlib import Path
 
 # Cargar .env si existe (evita tener que setear la variable en cada terminal)
@@ -41,16 +42,23 @@ st.set_page_config(
 # ── Imports del pipeline ──────────────────────────────────────────────────────
 try:
     import config
-    from modules.downloader  import download_video
-    from modules.analyzer    import parse_vtt, identify_clips, get_cues_for_clip
+    from modules.downloader  import download_video, load_local_video
+    from modules.analyzer    import parse_vtt, identify_clips, get_cues_for_clip, transcript_coverage
     from modules.clipper     import cut_clips
     from modules.renderer    import render_clips
     from modules.caption_gen import generate_all_captions
+    from modules.transcriber import transcribe_video
     CONFIG_OK    = True
     CONFIG_ERROR = None
 except EnvironmentError as e:
     CONFIG_OK    = False
     CONFIG_ERROR = str(e)
+
+try:
+    import faster_whisper as _fw  # noqa
+    WHISPER_AVAILABLE = True
+except ImportError:
+    WHISPER_AVAILABLE = False
 
 # ── Persistencia de estado en disco ──────────────────────────────────────────
 _STATE_FILE = Path(__file__).parent / ".pipeline_state.json"
@@ -82,7 +90,7 @@ def _restore_paths(obj, path_keys=("video_path", "vtt_path", "clip_path", "outpu
 
 def save_state():
     data = {k: _paths_to_str(st.session_state[k])
-            for k in ("stage", "video_info", "cues", "clips", "clipped", "final_clips")}
+            for k in ("stage", "source_mode", "video_info", "cues", "clips", "clipped", "final_clips")}
     _STATE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -107,6 +115,7 @@ _ZUMO_HOSTS = (
 
 DEFAULTS = {
     "stage":           "idle",
+    "source_mode":     "youtube",
     "video_info":      None,
     "cues":            [],
     "clips":           [],
@@ -128,8 +137,8 @@ if "stage" not in st.session_state:
 
 
 def reset():
-    for k, v in DEFAULTS.items():
-        st.session_state[k] = v
+    for k in list(DEFAULTS.keys()):
+        st.session_state.pop(k, None)
     if _STATE_FILE.exists():
         _STATE_FILE.unlink()
 
@@ -150,6 +159,45 @@ def go_back():
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+# Umbral mínimo de cobertura del transcript (fracción del video con cues).
+# Por debajo de esto consideramos el VTT escaso y caemos a Whisper.
+MIN_TRANSCRIPT_COVERAGE = 0.5
+
+
+def whisper_fallback(info: dict, cues: list, progress_fn=None) -> tuple[list, object]:
+    """
+    Fallback automático: si el transcript falta o cubre poco del video,
+    transcribe el audio con Whisper y devuelve los cues mejorados.
+
+    Devuelve (cues, vtt_path). Si Whisper no está disponible o no mejora la
+    cobertura, devuelve los cues originales sin cambios.
+    """
+    duration = info.get("duration", 0) or 0
+    coverage = transcript_coverage(cues, duration)
+    sparse   = (not cues) or (duration > 0 and coverage < MIN_TRANSCRIPT_COVERAGE)
+
+    if not sparse or not WHISPER_AVAILABLE:
+        return cues, info.get("vtt_path")
+
+    if progress_fn:
+        estado = "sin subtítulos" if not cues else f"transcript escaso ({coverage:.0%} del video)"
+        progress_fn(f"⚠️ {estado} — transcribiendo el audio con Whisper…")
+    try:
+        vtt    = transcribe_video(info["video_path"], progress_fn=progress_fn)
+        w_cues = parse_vtt(vtt)
+    except Exception as e:
+        if progress_fn:
+            progress_fn(f"No se pudo transcribir con Whisper: {e}")
+        return cues, info.get("vtt_path")
+
+    # Solo reemplazamos si Whisper realmente cubre más del video
+    if transcript_coverage(w_cues, duration) > coverage:
+        if progress_fn:
+            progress_fn(f"✅ Whisper generó {len(w_cues)} cues (mejor cobertura)")
+        return w_cues, vtt
+    return cues, info.get("vtt_path")
+
 
 def make_live_logger(placeholder):
     """
@@ -301,40 +349,67 @@ LABELS = ["—", "1· Descargado", "2· Analizado", "3· Clips cortados", "4· C
 stage_idx = STAGES.index(st.session_state.stage)
 st.progress(
     stage_idx / (len(STAGES) - 1),
-    text=LABELS[stage_idx] if stage_idx > 0 else "Pegá una URL para empezar",
+    text=LABELS[stage_idx] if stage_idx > 0 else "Pegá una URL o elegí un archivo local para empezar",
 )
 st.divider()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PASO 1 — URL + Descarga
+# PASO 1 — Fuente + Carga
 # ══════════════════════════════════════════════════════════════════════════════
 
-col_url, col_dl, col_rst = st.columns([5, 1.5, 1])
+if st.session_state.stage == "idle":
+    # Nota: no usamos key="source_mode" porque Streamlit purga las claves
+    # ligadas a un widget cuando éste no se dibuja (al avanzar de stage),
+    # y más abajo leemos source_mode incondicionalmente. Guardamos el valor
+    # en una clave plana que nunca se recolecta.
+    st.session_state.source_mode = st.radio(
+        "Fuente",
+        options=["youtube", "local"],
+        format_func=lambda x: "▶ YouTube URL" if x == "youtube" else "📂 Archivo local",
+        index=0 if st.session_state.source_mode == "youtube" else 1,
+        horizontal=True,
+        label_visibility="collapsed",
+    )
 
-with col_url:
-    url = st.text_input(
-        "URL",
-        placeholder="https://youtube.com/watch?v=...",
+_is_youtube = st.session_state.source_mode == "youtube"
+
+col_input, col_btn, col_rst = st.columns([5, 1.5, 1])
+
+with col_input:
+    _placeholder = (
+        "https://youtube.com/watch?v=..."
+        if _is_youtube else
+        r"C:\Videos\mi_video.mp4"
+    )
+    _input_val = st.text_input(
+        "Entrada",
+        placeholder=_placeholder,
         disabled=st.session_state.stage != "idle",
         label_visibility="collapsed",
     )
 
-with col_dl:
+with col_btn:
     if st.session_state.stage == "idle":
-        if st.button("▶ Descargar", type="primary", use_container_width=True):
-            if not url.strip():
-                st.warning("Pegá una URL primero.")
-            else:
+        _btn_label = "▶ Descargar" if _is_youtube else "📂 Cargar"
+        if st.button(_btn_label, type="primary", use_container_width=True):
+            _val = _input_val.strip().strip('"').strip("'")
+            if not _val:
+                st.warning("Ingresá una URL o ruta de video.")
+            elif _is_youtube:
                 with st.status("Descargando…", expanded=True) as s:
                     log_box = st.empty()
                     try:
                         info = download_video(
-                            url.strip(),
+                            _val,
                             config.DOWNLOADS_DIR,
                             progress_fn=make_live_logger(log_box),
                         )
                         cues = parse_vtt(info["vtt_path"]) if info["vtt_path"] else []
+                        # Fallback automático a Whisper si el VTT falta o es escaso
+                        cues, info["vtt_path"] = whisper_fallback(
+                            info, cues, progress_fn=make_live_logger(log_box)
+                        )
                         log_box.empty()
                         st.session_state.video_info = info
                         st.session_state.cues       = cues
@@ -345,6 +420,31 @@ with col_dl:
                     except Exception as e:
                         log_box.empty()
                         s.update(label="❌ Error al descargar", state="error")
+                        st.session_state["_last_error"] = str(e)
+            else:
+                with st.status("Cargando video…", expanded=True) as s:
+                    log_box = st.empty()
+                    try:
+                        info = load_local_video(
+                            _val,
+                            config.DOWNLOADS_DIR,
+                            progress_fn=make_live_logger(log_box),
+                        )
+                        cues = parse_vtt(info["vtt_path"]) if info["vtt_path"] else []
+                        # Fallback automático a Whisper si el VTT falta o es escaso
+                        cues, info["vtt_path"] = whisper_fallback(
+                            info, cues, progress_fn=make_live_logger(log_box)
+                        )
+                        log_box.empty()
+                        st.session_state.video_info = info
+                        st.session_state.cues       = cues
+                        st.session_state.stage      = "downloaded"
+                        save_state()
+                        s.update(label=f"✅ {info['title']}", state="complete")
+                        st.rerun()
+                    except Exception as e:
+                        log_box.empty()
+                        s.update(label="❌ Error al cargar", state="error")
                         st.session_state["_last_error"] = str(e)
 
 if st.session_state.get("_last_error"):
@@ -381,8 +481,62 @@ if st.session_state.stage == "downloaded":
         reset()
         st.rerun()
 
-    if not st.session_state.cues:
-        st.warning("⚠️ No hay transcript VTT. Claude necesita subtítulos automáticos para identificar timestamps precisos. Probá con un video que los tenga habilitados.")
+    _dur     = st.session_state.video_info.get("duration", 0) or 0
+    _cov     = transcript_coverage(st.session_state.cues, _dur)
+    _no_cues = not st.session_state.cues
+    _sparse  = _no_cues or (_dur > 0 and _cov < MIN_TRANSCRIPT_COVERAGE)
+
+    if _sparse:
+        if not WHISPER_AVAILABLE:
+            _msg = (
+                "⚠️ No hay transcript VTT y **faster-whisper no está instalado**."
+                if _no_cues else
+                f"⚠️ El transcript cubre solo ~{_cov:.0%} del video y **faster-whisper no está instalado** para mejorarlo."
+            )
+            st.error(_msg + " Instalalo con `pip install faster-whisper`.")
+        else:
+            # El fallback automático ya corrió al descargar; este botón permite
+            # re-transcribir manualmente (p. ej. con un modelo más grande).
+            if _no_cues:
+                st.info("Sin subtítulos VTT. Transcribí el audio con Whisper para que Claude pueda analizar el video.")
+            else:
+                st.warning(
+                    f"⚠️ El transcript es escaso (cubre ~{_cov:.0%} del video). "
+                    "Podés re-transcribir con Whisper para mejorar el análisis."
+                )
+            _col_model, _col_wbtn = st.columns([2, 1])
+            with _col_model:
+                _whisper_model = st.selectbox(
+                    "Modelo Whisper",
+                    options=["tiny", "base", "small", "medium", "large-v2"],
+                    index=2,
+                    help="tiny/base = rápido pero menos preciso · small = buen equilibrio · medium/large = mejor calidad, más lento",
+                    label_visibility="collapsed",
+                )
+            with _col_wbtn:
+                _btn_label = "🎙️ Transcribir" if _no_cues else "🎙️ Re-transcribir"
+                if st.button(_btn_label, type="primary", use_container_width=True):
+                    with st.status("Transcribiendo audio…", expanded=True) as _ws:
+                        _wlog = st.empty()
+                        try:
+                            _vtt = transcribe_video(
+                                st.session_state.video_info["video_path"],
+                                progress_fn=make_live_logger(_wlog),
+                                model_size=_whisper_model,
+                            )
+                            _cues = parse_vtt(_vtt)
+                            _wlog.empty()
+                            st.session_state.video_info["vtt_path"] = _vtt
+                            st.session_state.cues = _cues
+                            save_state()
+                            _ws.update(label=f"✅ {len(_cues)} cues generados", state="complete")
+                            st.rerun()
+                        except Exception as _e:
+                            _wlog.empty()
+                            _ws.update(label="❌ Error al transcribir", state="error")
+                            st.session_state["_last_error"] = str(_e)
+    elif st.session_state.cues:
+        st.caption(f"📝 Transcript: {len(st.session_state.cues)} cues · cobertura ~{_cov:.0%} del video")
 
     col_n, col_dur = st.columns(2)
     with col_n:
@@ -421,7 +575,9 @@ if st.session_state.stage == "downloaded":
                 st.rerun()
             except Exception as e:
                 s.update(label="❌ Error en análisis", state="error")
-                st.session_state["_last_error"] = f"Error en análisis: {e}"
+                st.error(f"Error en análisis: {e}")
+                with st.expander("Detalle técnico"):
+                    st.code(traceback.format_exc())
 
 
 # ══════════════════════════════════════════════════════════════════════════════

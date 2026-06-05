@@ -64,6 +64,32 @@ def _merge_rolling_texts(texts: list[str]) -> str:
     return result.strip()
 
 
+def transcript_coverage(cues: list[dict], duration: float) -> float:
+    """
+    Fracción del video (0.0–1.0) que está cubierta por cues con texto real.
+    Divide el video en buckets de 10s y cuenta cuántos tienen al menos un cue.
+    Sirve para detectar transcripts escasos/fragmentados (VTT incompleto).
+
+    Capea la duración considerada de cada cue: YouTube a veces inserta un cue
+    "placeholder" larguísimo (decenas de minutos) que tapa un hueco sin
+    subtítulos; sin el cap, ese cue falsearía la cobertura como ~100%.
+    """
+    if not cues or duration <= 0:
+        return 0.0
+    bucket    = 10.0
+    max_cue   = 30.0   # un subtítulo real no dura más que esto; arriba = placeholder
+    n_buckets = max(1, int(duration // bucket) + 1)
+    covered   = set()
+    for c in cues:
+        if not c.get("text", "").strip():
+            continue  # cues sin texto no aportan contenido
+        end = min(c["end"], c["start"] + max_cue)
+        for b in range(int(c["start"] // bucket), int(end // bucket) + 1):
+            if 0 <= b < n_buckets:
+                covered.add(b)
+    return len(covered) / n_buckets
+
+
 def cues_to_text(cues: list[dict], block_seconds: float = 15.0) -> str:
     """
     Fusiona cues en bloques de ~block_seconds segundos usando _merge_rolling_texts.
@@ -96,6 +122,32 @@ def cues_to_text(cues: list[dict], block_seconds: float = 15.0) -> str:
 
 # ── Claude analysis ───────────────────────────────────────────────────────────
 
+def _extract_json(response_text: str) -> dict:
+    """
+    Extrae un objeto JSON de la respuesta de Claude de forma robusta.
+    Tolera markdown fences y texto antes/después del objeto.
+    """
+    text = response_text.strip()
+    # Quitar fences de markdown si los hay
+    if "```" in text:
+        text = re.sub(r"```(?:json)?", "", text).strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    # Fallback: tomar el substring entre el primer '{' y el último '}'
+    start = text.find("{")
+    end   = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return json.loads(text[start:end + 1])
+    # No se pudo: error claro con un fragmento de lo que devolvió Claude
+    snippet = response_text.strip()[:500]
+    raise ValueError(
+        "Claude no devolvió JSON válido. Respuesta recibida:\n" + (snippet or "(vacía)")
+    )
+
+
+
 def identify_clips(
     cues: list[dict],
     video_title: str,
@@ -120,6 +172,12 @@ def identify_clips(
             ...
         ]
     """
+    if not cues:
+        raise ValueError(
+            "No hay transcript para analizar. El video no tiene subtítulos VTT; "
+            "transcribí el audio con Whisper antes de analizar."
+        )
+
     n_clips  = target_clips or config.TARGET_CLIPS
     min_secs = min_seconds  or config.MIN_CLIP_SECONDS
     max_secs = max_seconds  or config.MAX_CLIP_SECONDS
@@ -130,15 +188,20 @@ def identify_clips(
     client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
     transcript_text = cues_to_text(cues)
-    max_chars = 40_000
+    # El modelo tiene contexto amplio; mandamos el transcript completo salvo que
+    # sea enorme. Antes se salteaban líneas (1 de cada N), lo que fragmentaba el
+    # contenido y dejaba a Claude "viendo" un texto entrecortado. Ahora, si hay
+    # que recortar, acortamos el texto de cada bloque pero CONSERVAMOS todos los
+    # timestamps, manteniendo la cobertura temporal de punta a punta del video.
+    max_chars = 150_000
     if len(transcript_text) > max_chars:
-        # Muestreo uniforme para cubrir el video completo en vez de truncar el inicio
-        lines = transcript_text.split("\n")
-        target = max_chars // max(1, len(transcript_text) // max(len(lines), 1))
-        target = max(1, min(target, len(lines)))
-        step = len(lines) / target
-        sampled = [lines[int(i * step)] for i in range(target)]
-        transcript_text = "\n".join(sampled) + "\n\n[Transcript muestreado — cubre el video completo]"
+        lines  = transcript_text.split("\n")
+        budget = max(60, max_chars // max(1, len(lines)))
+        lines  = [
+            (ln[:budget].rstrip() + "…") if len(ln) > budget else ln
+            for ln in lines
+        ]
+        transcript_text = "\n".join(lines) + "\n\n[Transcript condensado — cubre el video completo]"
 
     excluded_block = ""
     if excluded_ranges:
@@ -159,7 +222,7 @@ Tenés el siguiente transcript del video "{video_title}" con timestamps en forma
 Tu tarea es identificar los {request_n} mejores fragmentos para clips virales en TikTok/Instagram/YouTube Shorts.
 {excluded_block}
 REGLAS ESTRICTAS:
-- Debés devolver EXACTAMENTE {request_n} clips, ni más ni menos
+- Devolvé hasta {request_n} clips. Buscá llegar a ese número, pero si el transcript es escaso o fragmentado devolvé los que SÍ tengan valor (aunque sean menos). Priorizá calidad sobre cantidad y devolvé al menos los que encuentres.
 - Cada clip debe durar entre {min_secs} y {max_secs} segundos
 - Los clips NO deben superponerse ni repetir contenido
 - Distribuí los clips a lo largo de TODO el video, no solo al principio
@@ -176,37 +239,58 @@ NO inventes ni aproximes timestamps que no aparezcan en el transcript.
 TRANSCRIPT:
 {transcript_text}
 
-Respondé ÚNICAMENTE en JSON válido con esta estructura exacta:
-{{
-  "clips": [
-    {{
-      "start": 932.4,
-      "end": 975.1,
-      "title": "Título corto del clip (máx 60 chars)",
-      "reason": "Por qué es un buen clip (1 oración)",
-      "type": "insight"
-    }}
-  ]
-}}
-
+Devolvé los clips llamando a la herramienta `submit_clips`.
 Tipos válidos: insight, advice, humor, stat, story"""
 
     # Aumentar max_tokens proporcionalmente al número de clips solicitados
     max_tokens = min(8000, 3000 + request_n * 120)
 
+    # Forzamos tool use para garantizar salida estructurada: este modelo no
+    # admite prefill, y sin esto Claude a veces responde en prosa (ej. cuando
+    # el transcript es escaso) y el JSON no se puede parsear.
+    clips_tool = {
+        "name": "submit_clips",
+        "description": "Registra los clips identificados para el video.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "clips": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "start":  {"type": "number", "description": "Inicio en segundos"},
+                            "end":    {"type": "number", "description": "Fin en segundos"},
+                            "title":  {"type": "string", "description": "Título corto (máx 60 chars)"},
+                            "reason": {"type": "string", "description": "Por qué es un buen clip"},
+                            "type":   {"type": "string", "enum": ["insight", "advice", "humor", "stat", "story"]},
+                        },
+                        "required": ["start", "end", "title", "reason", "type"],
+                    },
+                },
+            },
+            "required": ["clips"],
+        },
+    }
+
     message = client.messages.create(
         model=config.CLAUDE_MODEL,
         max_tokens=max_tokens,
+        tools=[clips_tool],
+        tool_choice={"type": "tool", "name": "submit_clips"},
         messages=[{"role": "user", "content": prompt}],
     )
-    response_text = message.content[0].text.strip()
 
-    # Quitar posibles markdown fences
-    if "```" in response_text:
-        response_text = re.sub(r"```(?:json)?\n?", "", response_text).strip()
+    if message.stop_reason == "max_tokens":
+        raise ValueError(
+            "La respuesta de Claude se cortó por límite de tokens. "
+            "Probá con menos clips o un rango de duración más acotado."
+        )
 
-    data = json.loads(response_text)
-    clips = data.get("clips", [])
+    tool_blocks = [b for b in message.content if getattr(b, "type", None) == "tool_use"]
+    if not tool_blocks:
+        raise ValueError("Claude no llamó a la herramienta de clips en el análisis.")
+    clips = tool_blocks[0].input.get("clips", [])
 
     # Validar y sanitizar cada clip; recortar a n_clips exactos
     validated = []
@@ -264,24 +348,40 @@ El título debe reflejar lo que realmente se dice en el clip, no una descripció
 
 {chr(10).join(sections)}
 
-Respondé ÚNICAMENTE en JSON:
-{{
-  "clips": [
-    {{"title": "...", "reason": "..."}}
-  ]
-}}"""
+Devolvé un título y una razón por cada clip, EN EL MISMO ORDEN, llamando a `submit_titles`."""
+
+    titles_tool = {
+        "name": "submit_titles",
+        "description": "Registra el título y la razón refinados de cada clip, en orden.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "clips": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title":  {"type": "string"},
+                            "reason": {"type": "string"},
+                        },
+                        "required": ["title", "reason"],
+                    },
+                },
+            },
+            "required": ["clips"],
+        },
+    }
 
     try:
         message = client.messages.create(
             model=config.CLAUDE_MODEL,
             max_tokens=2000,
+            tools=[titles_tool],
+            tool_choice={"type": "tool", "name": "submit_titles"},
             messages=[{"role": "user", "content": prompt}],
         )
-        response = message.content[0].text.strip()
-        if "```" in response:
-            response = re.sub(r"```(?:json)?\n?", "", response).strip()
-        data = json.loads(response)
-        refined = data.get("clips", [])
+        tool_blocks = [b for b in message.content if getattr(b, "type", None) == "tool_use"]
+        refined = tool_blocks[0].input.get("clips", []) if tool_blocks else []
         for i, clip in enumerate(clips):
             if i < len(refined):
                 clip["title"]  = refined[i].get("title", clip["title"])
