@@ -35,6 +35,15 @@ def transcribe_video(
     Guarda el VTT junto al video original.
     Retorna el path al archivo VTT generado.
     """
+    import os
+
+    # Sube el timeout de descarga de HF Hub (por defecto solo 10 s, insuficiente
+    # para modelos grandes como large-v2 ~3 GB con conexión lenta) y silencia el
+    # aviso de "unauthenticated requests". Si tienes un token de HF, ponlo en la
+    # variable de entorno HF_TOKEN y se usará automáticamente.
+    os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "60")
+    os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+
     from faster_whisper import WhisperModel
 
     video_path = Path(video_path)
