@@ -1,6 +1,10 @@
 
 anthropic>=0.40.0
 yt-dlp>=2024.0.0
+# curl_cffi habilita la "impersonation" de navegador en yt-dlp; sin ella YouTube
+# devuelve 403 en el stream de video en muchas redes/IPs. La cota <0.15 es porque
+# yt-dlp solo soporta 0.10.x–0.14.x (la 0.15 rompe el backend).
+curl_cffi>=0.10,<0.15
 streamlit>=1.35.0
 pandas>=2.0.0
 faster-whisper>=1.0.0
