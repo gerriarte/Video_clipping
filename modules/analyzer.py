@@ -231,6 +231,17 @@ REGLAS ESTRICTAS:
 - Preferí momentos donde un host da un consejo claro o comparte una opinión fuerte
 - Ignorá saludos, transiciones y relleno sin valor
 
+TÍTULOS (clave para que sean usables):
+- El título debe reflejar EXACTAMENTE lo que se dice en ESE fragmento: una frase, idea o afirmación concreta que aparezca en el transcript del clip.
+- NO uses títulos genéricos ("Hablando de marketing"), ni inventes datos, cifras o promesas que no estén en el fragmento.
+- Si en el clip se dice una frase con gancho, usala o parafraseala fielmente.
+
+TEMAS EN VARIAS PARTES (campo `topic`):
+- Asigná a cada clip una etiqueta `topic` corta que describa su tema.
+- Si un mismo tema valioso es demasiado largo para un solo clip, o se retoma en otro momento del video, devolvé esos fragmentos como clips separados usando EXACTAMENTE la MISMA etiqueta `topic` en todos. Se publicarán como serie (Parte 1, Parte 2, …).
+- Cada parte debe seguir teniendo sentido por sí sola.
+- Si un clip es de un tema único (no tiene continuación), usá una etiqueta `topic` propia y distinta de las demás.
+
 TIMESTAMPS:
 Los valores start/end DEBEN ser los segundos exactos tomados de los timestamps [HH:MM:SS.mmm] del transcript.
 Ejemplo: [00:15:32.400] → start = 932.4
@@ -261,11 +272,12 @@ Tipos válidos: insight, advice, humor, stat, story"""
                         "properties": {
                             "start":  {"type": "number", "description": "Inicio en segundos"},
                             "end":    {"type": "number", "description": "Fin en segundos"},
-                            "title":  {"type": "string", "description": "Título corto (máx 60 chars)"},
+                            "title":  {"type": "string", "description": "Título corto (máx 60 chars) basado en una frase o idea concreta del fragmento"},
                             "reason": {"type": "string", "description": "Por qué es un buen clip"},
                             "type":   {"type": "string", "enum": ["insight", "advice", "humor", "stat", "story"]},
+                            "topic":  {"type": "string", "description": "Etiqueta corta del tema. Misma etiqueta EXACTA en clips que continúan el mismo tema (serie); etiqueta propia si es único."},
                         },
-                        "required": ["start", "end", "title", "reason", "type"],
+                        "required": ["start", "end", "title", "reason", "type", "topic"],
                     },
                 },
             },
@@ -307,15 +319,48 @@ Tipos válidos: insight, advice, humor, stat, story"""
                 "title":  clip.get("title", f"Clip {len(validated)+1}"),
                 "reason": clip.get("reason", ""),
                 "type":   clip.get("type", "insight"),
+                "topic":  (clip.get("topic") or "").strip(),
             })
 
     if not validated:
         raise ValueError("Claude no devolvió clips válidos dentro del rango de duración permitido")
 
+    # Detectar temas en varias partes: clips que comparten `topic` se publican
+    # como serie. Asigna part/part_total ordenando por tiempo de aparición.
+    _assign_parts(validated)
+
     # Segunda pasada: títulos precisos basados en el transcript real de cada clip
     validated = _refine_titles(validated, cues, channel_context=channel_context)
 
+    # Sufijo "(Parte i/n)" en el título, después de refinar para no pisarlo.
+    for clip in validated:
+        if clip.get("part_total", 0) > 1:
+            clip["title"] = f"{clip['title']} (Parte {clip['part']}/{clip['part_total']})"
+
     return validated
+
+
+def _assign_parts(clips: list[dict]) -> None:
+    """
+    Agrupa clips por `topic`: si dos o más comparten la misma etiqueta, los marca
+    como serie con `part` (1, 2, …) y `part_total`, ordenados por tiempo de inicio.
+    Los clips de tema único quedan sin marca de parte. Muta la lista in-place.
+    """
+    from collections import defaultdict
+
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for clip in clips:
+        topic = clip.get("topic", "")
+        if topic:
+            groups[topic].append(clip)
+
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        members.sort(key=lambda c: c["start"])
+        for i, clip in enumerate(members, 1):
+            clip["part"]       = i
+            clip["part_total"] = len(members)
 
 
 def _refine_titles(clips: list[dict], cues: list[dict], channel_context: str | None = None) -> list[dict]:
@@ -335,16 +380,23 @@ def _refine_titles(clips: list[dict], cues: list[dict], channel_context: str | N
         clip_text = _merge_rolling_texts([c["text"] for c in clip_cues])
         dur = clip["end"] - clip["start"]
         ts  = f"{_seconds_to_timestamp(clip['start'])} → {_seconds_to_timestamp(clip['end'])}"
-        sections.append(f"CLIP {i+1} ({ts}, {dur:.0f}s):\n{clip_text or '(sin transcript)'}")
+        # Marca de serie para que Claude haga títulos coherentes entre partes.
+        serie = ""
+        if clip.get("part_total", 0) > 1:
+            serie = f" [SERIE: parte {clip['part']} de {clip['part_total']} del mismo tema]"
+        sections.append(f"CLIP {i+1} ({ts}, {dur:.0f}s){serie}:\n{clip_text or '(sin transcript)'}")
 
     ctx = channel_context or config.ZUMO_CONTEXT
     canal = ctx.splitlines()[0].split(" es ")[0].split("\n")[0].strip() if ctx else "este canal"
     prompt = f"""Tenés los siguientes fragmentos de transcript de clips de {canal}.
 Para cada clip generá:
-1. Un TÍTULO corto (máx 60 caracteres) que capture el tema central o la frase clave de ESE fragmento.
+1. Un TÍTULO corto (máx 60 caracteres) que capture la frase o idea clave de ESE fragmento.
 2. Una RAZÓN de una oración que explique por qué es un buen clip viral.
 
-El título debe reflejar lo que realmente se dice en el clip, no una descripción genérica.
+REGLAS DEL TÍTULO:
+- Debe reflejar fielmente lo que REALMENTE se dice en el clip; usá palabras o ideas que aparezcan en el fragmento.
+- NO inventes datos, cifras ni promesas que no estén en el texto. NO uses títulos genéricos.
+- Si un clip está marcado como [SERIE], su título debe ser coherente con las otras partes del mismo tema (mismo hilo conceptual), pero NO agregues "Parte 1/2" — eso se añade después automáticamente.
 
 {chr(10).join(sections)}
 

@@ -20,6 +20,14 @@ _NPX = "npx.cmd" if platform.system() == "Windows" else "npx"
 _CLIP_SERVER_PORT = 19876
 
 
+def _log(msg: str) -> None:
+    """print() a prueba de stdout no-UTF8 (Windows/charmap): nunca debe tumbar el render."""
+    try:
+        print(msg)
+    except UnicodeEncodeError:
+        print(msg.encode("ascii", "ignore").decode())
+
+
 class _ClipServer:
     """
     Servidor HTTP local que expone la carpeta de clips para que
@@ -144,7 +152,7 @@ def render_clips(
                 (clip["end"] - clip["start"]) * config.OUTPUT_FPS
             )
 
-            print(f"  🎬 [{done+1}/{total}] {title}")
+            _log(f"  🎬 [{done+1}/{total}] {title}")
 
             render_clip(
                 clip_path=clip["clip_path"],

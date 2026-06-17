@@ -11,6 +11,7 @@ import os
 import sys
 import traceback
 from pathlib import Path
+from datetime import datetime, timedelta, time as _time
 
 # Cargar .env si existe (evita tener que setear la variable en cada terminal)
 _env_file = Path(__file__).parent / ".env"
@@ -48,6 +49,7 @@ try:
     from modules.renderer    import render_clips
     from modules.caption_gen import generate_all_captions
     from modules.transcriber import transcribe_video
+    from modules.postiz      import PostizClient, build_posts_for_clip, to_utc_iso, PLATFORM_CAPTION_FIELD
     CONFIG_OK    = True
     CONFIG_ERROR = None
 except EnvironmentError as e:
@@ -265,12 +267,18 @@ def build_csv(clips: list, video_info: dict) -> str:
     fields = [
         "video_id", "video_title", "clip_index", "clip_title",
         "start", "end", "duration", "type", "reason",
+        "serie", "parte",
         "output_path", "caption_tiktok", "caption_instagram", "caption_youtube",
     ]
     writer = csv.DictWriter(output, fieldnames=fields)
     writer.writeheader()
     for clip in clips:
         caps = clip.get("captions", {})
+        total = clip.get("part_total", 0)
+        if total and total > 1:
+            serie, parte = clip.get("topic", ""), f"{clip.get('part', '')}/{total}"
+        else:
+            serie, parte = "", ""
         writer.writerow({
             "video_id":          video_info["video_id"],
             "video_title":       video_info["title"],
@@ -281,6 +289,8 @@ def build_csv(clips: list, video_info: dict) -> str:
             "duration":          f"{clip.get('end',0) - clip.get('start',0):.1f}",
             "type":              clip.get("type", ""),
             "reason":            clip.get("reason", ""),
+            "serie":             serie,
+            "parte":             parte,
             "output_path":       str(clip.get("output_path", clip.get("clip_path", ""))),
             "caption_tiktok":    caps.get("tiktok", ""),
             "caption_instagram": caps.get("instagram", ""),
@@ -914,3 +924,155 @@ if st.session_state.stage == "captioned":
             type="primary",
             use_container_width=True,
         )
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PASO 6 — Programar en Postiz
+    # ══════════════════════════════════════════════════════════════════════════
+    st.divider()
+    st.subheader("📤 Paso 6 — Programar en Postiz")
+
+    if not config.POSTIZ_API_KEY:
+        st.info(
+            "Configurá `POSTIZ_API_KEY` y `POSTIZ_API_URL` en el `.env` para "
+            "programar las publicaciones desde acá."
+        )
+    else:
+        _PLATS = list(PLATFORM_CAPTION_FIELD)  # tiktok, instagram, youtube
+
+        c1, c2, c3 = st.columns([1.2, 1, 1])
+        with c1:
+            start_date = st.date_input(
+                "Fecha del 1er post",
+                value=(datetime.now() + timedelta(days=1)).date(),
+                key="pz_date",
+            )
+        with c2:
+            start_time = st.time_input("Hora", value=_time(9, 0), key="pz_time")
+        with c3:
+            interval_h = st.number_input(
+                "Horas entre clips", min_value=0.0, value=24.0, step=1.0, key="pz_interval"
+            )
+
+        c4, c5 = st.columns([2, 1])
+        with c4:
+            sel_plats = st.multiselect(
+                "Plataformas", _PLATS, default=_PLATS, key="pz_plats"
+            )
+        with c5:
+            post_type = st.selectbox(
+                "Modo", ["schedule", "draft", "now"], key="pz_type",
+                help="schedule = programado · draft = borrador para revisar en Postiz · now = publicar ya",
+            )
+
+        start_dt = datetime.combine(start_date, start_time)
+
+        if sel_plats:
+            # Horarios base: escalonado desde el 1er post según el intervalo.
+            auto_times = [
+                start_dt + timedelta(hours=interval_h * i)
+                for i in range(len(final_clips))
+            ]
+
+            manual = st.toggle(
+                "Editar fecha/hora por post",
+                key="pz_manual",
+                help="Activalo para fijar el día y la hora de cada clip por separado "
+                     "(así decidís cuántos posts por día). Los valores arrancan desde "
+                     "la fecha/hora y el intervalo de arriba.",
+            )
+
+            if manual:
+                sched_df = pd.DataFrame({
+                    "Clip":   [c.get("title", "") for c in final_clips],
+                    "Cuándo": auto_times,
+                    "Plataformas": [
+                        ", ".join(
+                            p for p in sel_plats
+                            if (c.get("captions", {}).get(p) or "").strip()
+                        )
+                        for c in final_clips
+                    ],
+                })
+                edited = st.data_editor(
+                    sched_df,
+                    key="pz_sched_editor",
+                    use_container_width=True,
+                    hide_index=True,
+                    disabled=["Clip", "Plataformas"],
+                    column_config={
+                        "Cuándo": st.column_config.DatetimeColumn(
+                            "Cuándo", format="YYYY-MM-DD HH:mm", step=60, required=True
+                        ),
+                    },
+                )
+                schedule_times = [pd.Timestamp(x).to_pydatetime() for x in edited["Cuándo"]]
+            else:
+                schedule_times = auto_times
+                preview = [
+                    {
+                        "Cuándo":     schedule_times[i].strftime("%Y-%m-%d %H:%M"),
+                        "Clip":       clip.get("title", ""),
+                        "Plataformas": ", ".join(
+                            p for p in sel_plats
+                            if (clip.get("captions", {}).get(p) or "").strip()
+                        ),
+                    }
+                    for i, clip in enumerate(final_clips)
+                ]
+                st.dataframe(pd.DataFrame(preview), use_container_width=True, hide_index=True)
+
+            n_req = len(final_clips) * 2
+            if post_type != "draft" and n_req > 30:
+                st.warning(
+                    f"Son ~{n_req} requests y Postiz limita a 30/hora. "
+                    "Programá por tandas o subí el intervalo."
+                )
+
+            if st.button("📤 Programar en Postiz", type="primary", disabled=not sel_plats):
+                with st.status("Programando en Postiz…", expanded=True) as s:
+                    try:
+                        client   = PostizClient()
+                        channels = client.channel_map()
+                        usables  = [p for p in sel_plats if p in channels]
+                        faltan   = [p for p in sel_plats if p not in channels]
+                        if faltan:
+                            st.write(f"⚠️ Sin canal conectado para: {faltan} (se omiten).")
+                        if not usables:
+                            raise RuntimeError("Ninguna plataforma elegida tiene canal en Postiz.")
+
+                        prog = st.progress(0.0)
+                        ok = fail = 0
+                        total = len(final_clips)
+                        for i, clip in enumerate(final_clips):
+                            title = clip.get("title", f"clip {i+1}")
+                            vid   = Path(str(clip.get("output_path", clip.get("clip_path", ""))))
+                            when  = schedule_times[i]
+
+                            if not vid.exists():
+                                st.write(f"❌ {title}: video no encontrado ({vid.name})")
+                                fail += 1
+                                prog.progress((i + 1) / total)
+                                continue
+                            try:
+                                media = client.upload(vid)
+                                posts = build_posts_for_clip(clip, channels, media, usables)
+                                if not posts:
+                                    st.write(f"⚠️ {title}: sin captions para las plataformas elegidas.")
+                                    prog.progress((i + 1) / total)
+                                    continue
+                                client.create_post(posts, to_utc_iso(when), post_type=post_type)
+                                st.write(f"✅ {title} → {when:%Y-%m-%d %H:%M} ({len(posts)} canales)")
+                                ok += 1
+                            except Exception as ce:
+                                st.write(f"❌ {title}: {ce}")
+                                fail += 1
+                            prog.progress((i + 1) / total)
+
+                        verbo = "publicados" if post_type == "now" else "programados"
+                        s.update(
+                            label=f"✅ {ok} {verbo}" + (f", {fail} con error" if fail else ""),
+                            state="complete" if not fail else "error",
+                        )
+                    except Exception as e:
+                        s.update(label="❌ Error al programar en Postiz", state="error")
+                        st.session_state["_last_error"] = f"Error Postiz: {e}"

@@ -2,11 +2,37 @@
 Genera captions para TikTok, Instagram y YouTube usando Claude API.
 """
 
-import re
-import json
 import anthropic
 
 import config
+
+
+# Forzamos tool use para garantizar salida estructurada: este modelo no admite
+# prefill y, sin esto, Claude a veces responde en prosa o agrega texto alrededor
+# del JSON (o lo trunca por max_tokens), y json.loads fallaba con "Error generando
+# captions". Con tool_choice forzado siempre recibimos un objeto válido.
+_CAPTIONS_TOOL = {
+    "name": "submit_captions",
+    "description": "Registra los captions optimizados para cada plataforma.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "tiktok": {
+                "type": "string",
+                "description": "Caption para TikTok: máx 150 chars, primera línea = gancho, + 5-7 hashtags.",
+            },
+            "instagram": {
+                "type": "string",
+                "description": "Caption para Instagram: primera línea impactante, 2-3 líneas de apoyo, CTA, y 15-20 hashtags en bloque al final.",
+            },
+            "youtube": {
+                "type": "string",
+                "description": "Título/caption para YouTube Shorts: máx 100 chars, keyword al inicio, sin hashtags.",
+            },
+        },
+        "required": ["tiktok", "instagram", "youtube"],
+    },
+}
 
 
 def generate_captions(clip: dict, video_title: str, channel_context: str | None = None) -> dict:
@@ -43,7 +69,8 @@ TRANSCRIPCIÓN DEL CLIP:
 
 ---
 
-Generá captions optimizados para cada plataforma en español latino (neutro, profesional):
+Generá captions optimizados para cada plataforma en español latino (neutro, profesional).
+Basate en lo que REALMENTE se dice en la transcripción; no inventes datos ni cifras que no aparezcan.
 
 **TIKTOK** (máx 150 chars + 5-7 hashtags):
 - Primera línea = gancho que genere curiosidad o FOMO
@@ -60,25 +87,32 @@ Generá captions optimizados para cada plataforma en español latino (neutro, pr
 - Descriptivo y con keyword relevante al inicio
 - Sin hashtags (YouTube los pondrá del video padre)
 
-Respondé ÚNICAMENTE en JSON válido:
-{{
-  "tiktok":    "...",
-  "instagram": "...",
-  "youtube":   "..."
-}}"""
+Devolvé los captions llamando a la herramienta `submit_captions`."""
 
     message = client.messages.create(
         model=config.CLAUDE_MODEL,
-        max_tokens=1000,
+        max_tokens=2000,
+        tools=[_CAPTIONS_TOOL],
+        tool_choice={"type": "tool", "name": "submit_captions"},
         messages=[{"role": "user", "content": prompt}],
     )
 
-    response_text = message.content[0].text.strip()
+    if message.stop_reason == "max_tokens":
+        raise ValueError(
+            "La respuesta de captions se cortó por límite de tokens. "
+            "Probá de nuevo o acortá el contexto del canal."
+        )
 
-    if "```" in response_text:
-        response_text = re.sub(r"```(?:json)?\n?", "", response_text).strip()
+    tool_blocks = [b for b in message.content if getattr(b, "type", None) == "tool_use"]
+    if not tool_blocks:
+        raise ValueError("Claude no devolvió captions (no llamó a la herramienta `submit_captions`).")
 
-    return json.loads(response_text)
+    data = tool_blocks[0].input
+    return {
+        "tiktok":    data.get("tiktok", ""),
+        "instagram": data.get("instagram", ""),
+        "youtube":   data.get("youtube", ""),
+    }
 
 
 def generate_all_captions(clips: list[dict], video_title: str, channel_context: str | None = None) -> list[dict]:

@@ -3,7 +3,18 @@ Zumo Streaming Pipeline — Configuración central
 """
 
 import os
+import sys
 from pathlib import Path
+
+# En Windows el stdout/stderr suele quedar en cp1252 (charmap) y los emojis de
+# los print() revientan con UnicodeEncodeError. Eso, dentro de la app, se reporta
+# como "Error en Remotion" aunque el render ande bien. Forzamos UTF-8 al arranque.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        # Streamlit u otros wrappers pueden no exponer reconfigure(): se ignora.
+        pass
 
 # Cargar .env antes de leer variables (por si no se setearon en la sesión)
 _env = Path(__file__).parent / ".env"
@@ -55,3 +66,8 @@ if not ANTHROPIC_API_KEY:
         "Falta ANTHROPIC_API_KEY. "
         "Ejecutá: set ANTHROPIC_API_KEY=tu_key  (o agregala al .env)"
     )
+
+# ── Postiz (programación de publicaciones) ────────────────────────────────────
+# Self-hosted: la base termina en /api/public/v1. Cloud sería https://api.postiz.com/public/v1
+POSTIZ_API_URL = os.environ.get("POSTIZ_API_URL", "https://redes.abralatam.com/api/public/v1")
+POSTIZ_API_KEY = os.environ.get("POSTIZ_API_KEY", "")

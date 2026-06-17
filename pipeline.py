@@ -102,6 +102,7 @@ def _export_csv(clips: list[dict], csv_path: Path, video_title: str, video_id: s
     fieldnames = [
         "video_id", "video_title", "clip_index", "clip_title",
         "start", "end", "duration", "type", "reason",
+        "serie", "parte",
         "clip_path", "output_path",
         "caption_tiktok", "caption_instagram", "caption_youtube",
     ]
@@ -111,6 +112,7 @@ def _export_csv(clips: list[dict], csv_path: Path, video_title: str, video_id: s
         writer.writeheader()
         for clip in clips:
             captions = clip.get("captions", {})
+            serie, parte = _serie_parte(clip)
             writer.writerow({
                 "video_id":          video_id,
                 "video_title":       video_title,
@@ -121,12 +123,22 @@ def _export_csv(clips: list[dict], csv_path: Path, video_title: str, video_id: s
                 "duration":          f"{clip.get('end', 0) - clip.get('start', 0):.1f}",
                 "type":              clip.get("type", ""),
                 "reason":            clip.get("reason", ""),
+                "serie":             serie,
+                "parte":             parte,
                 "clip_path":         str(clip.get("clip_path", "")),
                 "output_path":       str(clip.get("output_path", "")),
                 "caption_tiktok":    captions.get("tiktok", ""),
                 "caption_instagram": captions.get("instagram", ""),
                 "caption_youtube":   captions.get("youtube", ""),
             })
+
+
+def _serie_parte(clip: dict) -> tuple[str, str]:
+    """Devuelve (serie, parte) para el CSV. Vacíos si el clip no es parte de una serie."""
+    total = clip.get("part_total", 0)
+    if total and total > 1:
+        return clip.get("topic", ""), f"{clip.get('part', '')}/{total}"
+    return "", ""
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────

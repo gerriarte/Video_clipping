@@ -24,6 +24,21 @@ def _probe_duration(video_path: Path) -> float:
     return 0.0
 
 
+def _pick_device() -> tuple[str, str]:
+    """
+    Elige el mejor backend para Whisper: GPU (CUDA) si está disponible, si no CPU.
+    En GPU usamos float16 (rápido y preciso); en CPU, int8 (lo más liviano).
+    Devuelve (device, compute_type).
+    """
+    try:
+        import ctranslate2
+        if ctranslate2.get_cuda_device_count() > 0:
+            return "cuda", "float16"
+    except Exception:
+        pass
+    return "cpu", "int8"
+
+
 def transcribe_video(
     video_path: Path | str,
     progress_fn: Callable[[str], None] | None = None,
@@ -48,10 +63,23 @@ def transcribe_video(
 
     video_path = Path(video_path)
 
-    if progress_fn:
-        progress_fn(f"Cargando modelo Whisper '{model_size}'… (primera vez descarga el modelo)")
+    device, compute_type = _pick_device()
 
-    model = WhisperModel(model_size, device="cpu", compute_type="int8")
+    if progress_fn:
+        destino = "GPU (CUDA)" if device == "cuda" else "CPU"
+        progress_fn(f"Cargando modelo Whisper '{model_size}' en {destino}… (primera vez descarga el modelo)")
+
+    try:
+        model = WhisperModel(model_size, device=device, compute_type=compute_type)
+    except Exception as e:
+        # Si la GPU falla (p. ej. faltan librerías CUDA/cuDNN), caemos a CPU.
+        if device == "cuda":
+            if progress_fn:
+                progress_fn(f"⚠️ No se pudo usar la GPU ({type(e).__name__}); usando CPU…")
+            device, compute_type = "cpu", "int8"
+            model = WhisperModel(model_size, device=device, compute_type=compute_type)
+        else:
+            raise
 
     if progress_fn:
         progress_fn("Transcribiendo audio… (puede tardar varios minutos según la duración)")
