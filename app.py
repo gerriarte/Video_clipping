@@ -51,6 +51,7 @@ try:
     from modules.transcriber import transcribe_video
     from modules.postiz      import PostizClient, build_posts_for_clip, maybe_upload_cover, to_utc_iso, PLATFORM_CAPTION_FIELD
     from modules.peaks       import compute_peaks
+    from modules.proxy       import ensure_proxy
     from modules.media_server import MediaServer
     from components.clip_editor import clip_editor
     CONFIG_OK    = True
@@ -314,41 +315,33 @@ def _clip_frame_bgr(clip: dict):
     return img
 
 
-def _crop_rect(src_w: int, src_h: int, target_aspect: float,
-               center_x: float, zoom: float, center_y: float = 0.42) -> dict:
-    """
-    Rectángulo (fracciones 0–1 de la fuente) de aspecto `target_aspect`, centrado
-    en (center_x, center_y) y acercado por `zoom` (>=1 = más cerrado). Es lo que
-    consume Remotion (manualCrops) y también el preview, así coinciden exacto.
-    """
-    S = (src_w / src_h) if src_h else (16 / 9)
-    if target_aspect <= S:      # destino más angosto que la fuente → recorte horizontal
-        rw0, rh0 = target_aspect / S, 1.0
-    else:                       # destino más ancho → recorte vertical
-        rw0, rh0 = 1.0, S / target_aspect
-    z = max(1.0, float(zoom))
-    w = rw0 / z
-    h = rh0 / z
-    x = min(max(center_x - w / 2, 0.0), max(0.0, 1.0 - w))
-    y = min(max(center_y - h / 2, 0.0), max(0.0, 1.0 - h))
-    return {"x": round(x, 5), "y": round(y, 5), "w": round(w, 5), "h": round(h, 5)}
-
-
-def _crop_from_rect(img, rect: dict):
-    """Recorta el rectángulo (fracciones) del frame BGR para el preview WYSIWYG."""
-    h, w = img.shape[:2]
-    x0 = max(0, int(round(rect["x"] * w)))
-    y0 = max(0, int(round(rect["y"] * h)))
-    x1 = min(w, int(round((rect["x"] + rect["w"]) * w)))
-    y1 = min(h, int(round((rect["y"] + rect["h"]) * h)))
-    if x1 <= x0 or y1 <= y0:
-        return img.copy()
-    return img[y0:y1, x0:x1].copy()
+from modules.framing import crop_rect as _crop_rect, crop_from_rect as _crop_from_rect
 
 
 def _fmt_aspect(fmt_key: str) -> float:
     p = config.FORMAT_PRESETS[fmt_key]
     return p["width"] / p["height"]
+
+
+def _face_center_y(img) -> float:
+    """Centro vertical (0–1) de la cara más grande (Haar) para el default vertical
+    del recorte; 0.42 (headroom típico) si no se detecta cara."""
+    try:
+        import cv2
+        h, w = img.shape[:2]
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        cascade = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        )
+        faces = cascade.detectMultiScale(
+            gray, 1.1, 5, minSize=(int(w * 0.06), int(h * 0.06))
+        )
+        if len(faces):
+            fx, fy, fw, fh = max(faces, key=lambda f: f[2] * f[3])
+            return min(0.9, max(0.1, (fy + fh / 2) / h))
+    except Exception:
+        pass
+    return 0.42
 
 
 def framing_controls(clip: dict) -> None:
@@ -378,6 +371,11 @@ def framing_controls(clip: dict) -> None:
     if not manual:
         return
 
+    # Default vertical basado en la cara detectada (headroom), cacheado.
+    if "crop_cy_default" not in clip:
+        clip["crop_cy_default"] = _face_center_y(img)
+    cy_def = clip["crop_cy_default"]
+
     # Preview a la IZQUIERDA, controles a la DERECHA.
     col_prev, col_ctrl = st.columns([1, 1.6])
 
@@ -388,23 +386,30 @@ def framing_controls(clip: dict) -> None:
             st.markdown("**Arriba**")
             top = st.slider("Posición ← →", 0.0, 1.0, float(clip.get("crop_top", 0.7)),
                             0.01, key=f"croptop_{idx}", help="0 = izquierda · 1 = derecha")
+            vyt = st.slider("Vertical ↑↓", 0.0, 1.0, float(clip.get("crop_cy_top", cy_def)),
+                            0.01, key=f"cyt_{idx}", help="0 = arriba · 1 = abajo (afecta al hacer zoom)")
             zt  = st.slider("Zoom (cerrar)", 1.0, 3.0, float(clip.get("zoom_top", 1.0)),
                             0.05, key=f"zoomtop_{idx}")
             st.markdown("**Abajo**")
             bot = st.slider("Posición ← →", 0.0, 1.0, float(clip.get("crop_bottom", 0.3)),
                             0.01, key=f"cropbot_{idx}", help="0 = izquierda · 1 = derecha")
+            vyb = st.slider("Vertical ↑↓", 0.0, 1.0, float(clip.get("crop_cy_bottom", cy_def)),
+                            0.01, key=f"cyb_{idx}", help="0 = arriba · 1 = abajo (afecta al hacer zoom)")
             zb  = st.slider("Zoom (cerrar)", 1.0, 3.0, float(clip.get("zoom_bottom", 1.0)),
                             0.05, key=f"zoombot_{idx}")
             if st.button("↕ Intercambiar arriba/abajo", key=f"swap_{idx}"):
                 clip["crop_top"], clip["crop_bottom"] = bot, top
                 clip["zoom_top"], clip["zoom_bottom"] = zb, zt
-                for k in (f"croptop_{idx}", f"cropbot_{idx}", f"zoomtop_{idx}", f"zoombot_{idx}"):
+                clip["crop_cy_top"], clip["crop_cy_bottom"] = vyb, vyt
+                for k in (f"croptop_{idx}", f"cropbot_{idx}", f"zoomtop_{idx}",
+                          f"zoombot_{idx}", f"cyt_{idx}", f"cyb_{idx}"):
                     st.session_state.pop(k, None)
                 st.rerun()
         clip["crop_top"], clip["crop_bottom"] = top, bot
         clip["zoom_top"], clip["zoom_bottom"] = zt, zb
-        rt = _crop_rect(src_w, src_h, half_aspect, top, zt)
-        rb = _crop_rect(src_w, src_h, half_aspect, bot, zb)
+        clip["crop_cy_top"], clip["crop_cy_bottom"] = vyt, vyb
+        rt = _crop_rect(src_w, src_h, half_aspect, top, zt, center_y=vyt)
+        rb = _crop_rect(src_w, src_h, half_aspect, bot, zb, center_y=vyb)
         clip["crop_rect_top"], clip["crop_rect_bottom"] = rt, rb
         ct, cb = _crop_from_rect(img, rt), _crop_from_rect(img, rb)
         wmin = min(ct.shape[1], cb.shape[1])
@@ -418,10 +423,12 @@ def framing_controls(clip: dict) -> None:
         with col_ctrl:
             center = st.slider("Posición ← →", 0.0, 1.0, float(clip.get("crop_center", 0.5)),
                                0.01, key=f"cropc_{idx}", help="0 = izquierda · 1 = derecha")
+            vy = st.slider("Vertical ↑↓", 0.0, 1.0, float(clip.get("crop_cy", cy_def)),
+                           0.01, key=f"cropcy_{idx}", help="0 = arriba · 1 = abajo (afecta al hacer zoom)")
             z = st.slider("Zoom (cerrar)", 1.0, 3.0, float(clip.get("zoom", 1.0)),
                           0.05, key=f"zoom_{idx}")
-        clip["crop_center"], clip["zoom"] = center, z
-        rect = _crop_rect(src_w, src_h, _fmt_aspect(fmt), center, z)
+        clip["crop_center"], clip["crop_cy"], clip["zoom"] = center, vy, z
+        rect = _crop_rect(src_w, src_h, _fmt_aspect(fmt), center, z, center_y=vy)
         clip["crop_rect"] = rect
         crop = _crop_from_rect(img, rect)
         with col_prev:
@@ -430,15 +437,14 @@ def framing_controls(clip: dict) -> None:
 
 
 # ── Editor de timeline (componente custom) ────────────────────────────────────
-_MEDIA_SERVER_PORT = 19877
 _EDITOR_TYPES = ["insight", "advice", "humor", "stat", "story"]
 
 
 def get_media_server():
-    """Server HTTP de sesión (con Range) que sirve el video de downloads/ al iframe."""
+    """Server HTTP de sesión (con Range, puerto efímero) que sirve downloads/ al iframe."""
     srv = st.session_state.get("_media_server")
     if srv is None:
-        srv = MediaServer(config.DOWNLOADS_DIR, port=_MEDIA_SERVER_PORT)
+        srv = MediaServer(config.DOWNLOADS_DIR)  # puerto efímero
         srv.start()
         st.session_state["_media_server"] = srv
     return srv
@@ -483,6 +489,31 @@ def clips_to_editor_seed(clips: list) -> list:
         "title": c.get("title", ""),
         "type":  c.get("type", "insight"),
     } for c in clips]
+
+
+def build_display_cues(cues: list, block_seconds: float = 6.0) -> list:
+    """
+    Agrupa los cues en bloques ~frase para mostrar un transcript limpio en el editor
+    (los auto-subs de YouTube son 'rolling' y repiten palabras; los fusionamos).
+    Devuelve [{start, end, text}, ...].
+    """
+    if not cues:
+        return []
+    from modules.analyzer import _merge_rolling_texts
+    blocks = []
+    cur, start = [], float(cues[0]["start"])
+    for c in cues:
+        if float(c["start"]) >= start + block_seconds and cur:
+            text = _merge_rolling_texts([x.get("text", "") for x in cur])
+            if text:
+                blocks.append({"start": start, "end": float(cur[-1]["end"]), "text": text})
+            cur, start = [], float(c["start"])
+        cur.append(c)
+    if cur:
+        text = _merge_rolling_texts([x.get("text", "") for x in cur])
+        if text:
+            blocks.append({"start": start, "end": float(cur[-1]["end"]), "text": text})
+    return blocks
 
 
 def editor_to_clips(items: list) -> list:
@@ -908,12 +939,19 @@ if st.session_state.stage == "editing":
         st.rerun()
 
     st.caption(
-        "Arrastrá sobre la onda para crear cortes, ajustá los bordes, y ponéle "
-        "título y tipo a cada uno. Cuando estés, tocá **Aplicar** y luego continuá."
+        "Arrastrá sobre la onda o **seleccioná texto del transcript** para crear "
+        "cortes. Ajustá los bordes (se pegan a los límites de frase), ponéle título "
+        "y tipo, y tocá **Aplicar**. Atajos: espacio = play · I/O = marcar in/out."
     )
 
-    server    = get_media_server()
-    video_url = server.url_for(info["video_path"])
+    server = get_media_server()
+
+    # Proxy 480p para editar fluido (una sola vez); el corte usa el ORIGINAL.
+    proxy_key = f"_proxy_{info.get('video_id','')}"
+    if proxy_key not in st.session_state:
+        with st.spinner("Preparando video para edición (proxy 480p, una sola vez)…"):
+            st.session_state[proxy_key] = str(ensure_proxy(info["video_path"]))
+    video_url = server.url_for(Path(st.session_state[proxy_key]))
 
     with st.spinner("Preparando la forma de onda…"):
         peaks = get_peaks(info)
@@ -921,13 +959,19 @@ if st.session_state.stage == "editing":
         st.caption("⚠️ No se pudo precomputar la onda (¿el video tiene audio?). "
                    "El editor igual funciona con el video.")
 
+    # Transcript en bloques ~frase para edición basada en contenido (snap a frases,
+    # clic para saltar, seleccionar texto para crear cortes).
+    cues = build_display_cues(st.session_state.cues)
+
     seed = clips_to_editor_seed(st.session_state.clips)
     result = clip_editor(
         video_url=video_url,
         duration=float(info.get("duration", 0) or 0),
         clips=seed,
         peaks=peaks,
+        cues=cues,
         types=_EDITOR_TYPES,
+        storage_key=str(info.get("video_id", "")),
         key=f"clip_editor_{info.get('video_id','')}",
     )
     if result is not None:
@@ -1267,6 +1311,20 @@ if st.session_state.stage == "captioned":
                 if vid_path and Path(str(vid_path)).exists():
                     st.video(str(vid_path))
                 st.caption(clip.get("reason", ""))
+                # Re-render de ESTE clip (útil tras ajustar encuadre/formato).
+                if st.button("🔄 Re-renderizar este clip", key=f"rerender_{clip['index']}"):
+                    with st.status(f"Re-renderizando clip {clip['index']}…", expanded=True) as _s:
+                        try:
+                            out_dir = config.OUTPUT_DIR / video_info["video_id"]
+                            re = render_clips([clip], out_dir, video_info["video_id"])
+                            if re:
+                                clip.update(re[0])  # nuevo output_path/cover_path
+                                save_state()
+                            _s.update(label="✅ Clip re-renderizado", state="complete")
+                            st.rerun()
+                        except Exception as e:
+                            _s.update(label="❌ Error al re-renderizar", state="error")
+                            st.session_state["_last_error"] = f"Re-render: {e}"
 
             with col_caps:
                 tab_tt, tab_ig, tab_yt = st.tabs(["TikTok", "Instagram", "YouTube Shorts"])

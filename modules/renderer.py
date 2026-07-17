@@ -7,20 +7,16 @@ resuelve automáticamente con el detector de caras.
 import json
 import math
 import platform
-import socketserver
 import subprocess
 import tempfile
-import threading
-import http.server
 from pathlib import Path
 
 import config
 from modules.layout_detector import detect_layout, detect_split
+from modules.media_server import MediaServer
 
 # En Windows, subprocess no puede ejecutar npx.ps1; usa npx.cmd
 _NPX = "npx.cmd" if platform.system() == "Windows" else "npx"
-
-_CLIP_SERVER_PORT = 19876
 
 
 def _log(msg: str) -> None:
@@ -29,39 +25,6 @@ def _log(msg: str) -> None:
         print(msg)
     except UnicodeEncodeError:
         print(msg.encode("ascii", "ignore").decode())
-
-
-class _ClipServer:
-    """
-    Servidor HTTP local que expone la carpeta de clips para que
-    Chromium (Puppeteer de Remotion) pueda cargar los videos.
-    Chromium bloquea file:// pero permite http://127.0.0.1.
-    """
-
-    def __init__(self, directory: Path, port: int = _CLIP_SERVER_PORT):
-        self._port = port
-        dir_str = str(directory)
-
-        class _Handler(http.server.SimpleHTTPRequestHandler):
-            def __init__(self, *a, **kw):
-                super().__init__(*a, directory=dir_str, **kw)
-            def log_message(self, *_):
-                pass
-
-        class _Server(socketserver.TCPServer):
-            allow_reuse_address = True  # debe ser atributo de clase para aplicar antes del bind
-
-        self._server = _Server(("127.0.0.1", port), _Handler)
-
-    def start(self):
-        t = threading.Thread(target=self._server.serve_forever, daemon=True)
-        t.start()
-
-    def stop(self):
-        self._server.shutdown()
-
-    def url_for(self, file_path: Path) -> str:
-        return f"http://127.0.0.1:{self._port}/{file_path.name}"
 
 
 # Valores de formato viejos que pudieron quedar en el estado persistido.
@@ -312,7 +275,7 @@ def render_clips(
     Renderiza todos los clips y retorna la lista con output_path añadido.
     progress_fn(done, total, titulo) se llama antes de cada clip y al finalizar.
     """
-    server = _ClipServer(config.CLIPS_DIR)
+    server = MediaServer(config.CLIPS_DIR)  # puerto efímero + Range
     server.start()
 
     total   = len(clips_with_subs)

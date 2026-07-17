@@ -82,10 +82,14 @@ class _ThreadingServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 
 class MediaServer:
-    """Sirve `directory` en 127.0.0.1:port con soporte de Range."""
+    """
+    Sirve `directory` en 127.0.0.1 con soporte de Range.
 
-    def __init__(self, directory: Path, port: int):
-        self._port = port
+    port=0 (default) toma un puerto EFÍMERO libre: así dos sesiones de Streamlit
+    (o el render y el editor a la vez) no chocan por un puerto fijo.
+    """
+
+    def __init__(self, directory: Path, port: int = 0):
         dir_str = str(directory)
 
         class _Handler(_RangeHandler):
@@ -94,6 +98,7 @@ class MediaServer:
 
         _Handler.protocol_version = "HTTP/1.1"
         self._server = _ThreadingServer(("127.0.0.1", port), _Handler)
+        self.port = self._server.server_address[1]  # real (efímero si port=0)
         self._dir = Path(directory)
 
     def start(self):
@@ -110,4 +115,4 @@ class MediaServer:
             rel = vp.relative_to(self._dir).as_posix()
         except ValueError:
             rel = vp.name
-        return f"http://127.0.0.1:{self._port}/{quote(rel)}"
+        return f"http://127.0.0.1:{self.port}/{quote(rel)}"

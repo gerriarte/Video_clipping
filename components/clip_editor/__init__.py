@@ -28,7 +28,9 @@ def clip_editor(
     duration: float,
     clips: list | None = None,
     peaks: list | None = None,
+    cues: list | None = None,
     types: list | None = None,
+    storage_key: str | None = None,
     key: str | None = None,
 ):
     """
@@ -39,6 +41,7 @@ def clip_editor(
         duration:  duración del video en segundos.
         clips:     cortes iniciales [{start, end, title, type}, ...] (semilla).
         peaks:     forma de onda precomputada (lista de floats) para videos largos.
+        cues:      transcript [{start, end, text}, ...] para edición por contenido.
         types:     opciones de tipo para el selector.
         key:       key de Streamlit.
 
@@ -51,7 +54,9 @@ def clip_editor(
         duration=duration,
         clips=clips or [],
         peaks=peaks,
+        cues=cues or [],
         types=types,
+        storage_key=storage_key or "",
         key=key,
         default=None,
     )
