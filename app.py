@@ -50,6 +50,9 @@ try:
     from modules.caption_gen import generate_all_captions
     from modules.transcriber import transcribe_video
     from modules.postiz      import PostizClient, build_posts_for_clip, maybe_upload_cover, to_utc_iso, PLATFORM_CAPTION_FIELD
+    from modules.peaks       import compute_peaks
+    from modules.media_server import MediaServer
+    from components.clip_editor import clip_editor
     CONFIG_OK    = True
     CONFIG_ERROR = None
 except EnvironmentError as e:
@@ -426,6 +429,78 @@ def framing_controls(clip: dict) -> None:
                      width="stretch", caption="Recorte")
 
 
+# ── Editor de timeline (componente custom) ────────────────────────────────────
+_MEDIA_SERVER_PORT = 19877
+_EDITOR_TYPES = ["insight", "advice", "humor", "stat", "story"]
+
+
+def get_media_server():
+    """Server HTTP de sesión (con Range) que sirve el video de downloads/ al iframe."""
+    srv = st.session_state.get("_media_server")
+    if srv is None:
+        srv = MediaServer(config.DOWNLOADS_DIR, port=_MEDIA_SERVER_PORT)
+        srv.start()
+        st.session_state["_media_server"] = srv
+    return srv
+
+
+def get_peaks(info: dict):
+    """
+    Forma de onda del video (None si no se pudo calcular). Cacheada en memoria
+    (sesión) y en disco (<video>.peaks.json) para no recomputar cada vez.
+    """
+    key = f"_peaks_{info.get('video_id', '')}"
+    if key in st.session_state:
+        return st.session_state[key]
+
+    vp = Path(info["video_path"])
+    cache_file = vp.with_suffix(vp.suffix + ".peaks.json")
+    if cache_file.exists():
+        try:
+            peaks = json.loads(cache_file.read_text(encoding="utf-8"))
+        except Exception:
+            peaks = None
+    else:
+        try:
+            peaks = compute_peaks(vp)
+        except Exception:
+            peaks = None
+        if peaks is not None:
+            try:
+                cache_file.write_text(json.dumps(peaks), encoding="utf-8")
+            except Exception:
+                pass
+
+    st.session_state[key] = peaks
+    return peaks
+
+
+def clips_to_editor_seed(clips: list) -> list:
+    """Convierte los clips actuales al formato de semilla del editor."""
+    return [{
+        "start": float(c["start"]),
+        "end":   float(c["end"]),
+        "title": c.get("title", ""),
+        "type":  c.get("type", "insight"),
+    } for c in clips]
+
+
+def editor_to_clips(items: list) -> list:
+    """Convierte la salida del editor a clips del pipeline."""
+    out = []
+    for n, it in enumerate(items, 1):
+        out.append({
+            "start":  float(it["start"]),
+            "end":    float(it["end"]),
+            "title":  (it.get("title") or "").strip() or f"Corte {n}",
+            "type":   it.get("type") or "insight",
+            "reason": "Corte manual (timeline)",
+            "topic":  "",
+            "_selected": True,
+        })
+    return out
+
+
 def build_csv(clips: list, video_info: dict) -> str:
     output = io.StringIO()
     fields = [
@@ -570,7 +645,9 @@ if not CONFIG_OK:
 # Barra de progreso
 STAGES = ["idle", "downloaded", "analyzed", "clipped", "captioned"]
 LABELS = ["—", "1· Descargado", "2· Analizado", "3· Clips cortados", "4· Captions listos"]
-stage_idx = STAGES.index(st.session_state.stage)
+# "editing" es un sub-modo (editor de timeline) que vive entre descargar y cortar;
+# a efectos de la barra de progreso lo tratamos como "descargado".
+stage_idx = STAGES.index(st.session_state.stage) if st.session_state.stage in STAGES else 1
 st.progress(
     stage_idx / (len(STAGES) - 1),
     text=LABELS[stage_idx] if stage_idx > 0 else "Pegá una URL o elegí un archivo local para empezar",
@@ -803,6 +880,74 @@ if st.session_state.stage == "downloaded":
                 with st.expander("Detalle técnico"):
                     st.code(traceback.format_exc())
 
+    st.divider()
+    st.caption("¿Preferís marcar los cortes a mano? Abrí el editor de timeline "
+               "(no depende de Claude).")
+    if st.button("✂️ Editar en timeline (manual)", key="go_editor_from_dl"):
+        st.session_state.stage = "editing"
+        save_state()
+        st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PASO 2b — Editor de timeline (manual, Claude-opcional)
+# ══════════════════════════════════════════════════════════════════════════════
+
+if st.session_state.stage == "editing":
+    info = st.session_state.video_info
+    if not info:
+        st.error("No hay video cargado.")
+        st.stop()
+
+    col_t, col_b = st.columns([5, 1])
+    col_t.subheader("✂️ Editor de timeline")
+    if col_b.button("← Volver", key="editor_back", use_container_width=True):
+        st.session_state.stage = "downloaded"
+        st.session_state.pop("editor_result", None)
+        save_state()
+        st.rerun()
+
+    st.caption(
+        "Arrastrá sobre la onda para crear cortes, ajustá los bordes, y ponéle "
+        "título y tipo a cada uno. Cuando estés, tocá **Aplicar** y luego continuá."
+    )
+
+    server    = get_media_server()
+    video_url = server.url_for(info["video_path"])
+
+    with st.spinner("Preparando la forma de onda…"):
+        peaks = get_peaks(info)
+    if peaks is None:
+        st.caption("⚠️ No se pudo precomputar la onda (¿el video tiene audio?). "
+                   "El editor igual funciona con el video.")
+
+    seed = clips_to_editor_seed(st.session_state.clips)
+    result = clip_editor(
+        video_url=video_url,
+        duration=float(info.get("duration", 0) or 0),
+        clips=seed,
+        peaks=peaks,
+        types=_EDITOR_TYPES,
+        key=f"clip_editor_{info.get('video_id','')}",
+    )
+    if result is not None:
+        st.session_state["editor_result"] = result
+
+    res = st.session_state.get("editor_result")
+    if res:
+        st.success(f"✅ {len(res)} corte(s) definidos.")
+        if st.button("➡️ Continuar a formato y corte", type="primary", key="editor_continue"):
+            st.session_state.clips          = editor_to_clips(res)
+            st.session_state.stage          = "analyzed"
+            st.session_state.last_dur_range = st.session_state.get(
+                "last_dur_range", (config.MIN_CLIP_SECONDS, config.MAX_CLIP_SECONDS)
+            )
+            st.session_state.pop("editor_result", None)
+            save_state()
+            st.rerun()
+    else:
+        st.info("Definí al menos un corte y tocá **✓ Aplicar** dentro del editor.")
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PASO 3 — Editar clips y cortar
@@ -817,13 +962,18 @@ if st.session_state.stage == "analyzed":
         st.rerun()
 
     # Botones de selección rápida
-    col_sel, col_desel, col_spacer = st.columns([1, 1, 6])
+    col_sel, col_desel, col_edit, col_spacer = st.columns([1, 1, 1.4, 5])
     if col_sel.button("☑ Todos", use_container_width=True):
         for c in st.session_state.clips:
             c["_selected"] = True
     if col_desel.button("☐ Ninguno", use_container_width=True):
         for c in st.session_state.clips:
             c["_selected"] = False
+    if col_edit.button("✂️ Timeline", use_container_width=True,
+                       help="Ajustar estos cortes en el editor visual de timeline"):
+        st.session_state.stage = "editing"
+        save_state()
+        st.rerun()
 
     st.caption("Marcá los clips que querés cortar. Podés editar título, tiempos y tipo.")
 

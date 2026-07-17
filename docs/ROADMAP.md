@@ -68,7 +68,16 @@ end-to-end con un clip por formato (idealmente uno con los dos hosts para el spl
 
 ---
 
-## Track 2 — Editor visual de timeline (Claude-opcional)
+## Track 2 — Editor visual de timeline (Claude-opcional)   ✅ IMPLEMENTADO (2026-07-17)
+
+> Estado: implementado y probado end-to-end. Componente React+wavesurfer en
+> `components/clip_editor/`; media server con Range en `modules/media_server.py`;
+> peaks en `modules/peaks.py` (cacheados en disco). Se llega desde el Paso 2
+> ("✂️ Editar en timeline") o Paso 3 ("✂️ Timeline"); al Aplicar+Continuar, los
+> cortes caen en la tabla de formato existente y siguen el pipeline normal.
+> Aprendizajes: (1) las regiones necesitan la duración conocida — se siembran en
+> `loadedmetadata`, no al montar; (2) el video se sirve con soporte de **Range**
+> (el SimpleHTTPServer no lo trae) o el seek se rompe en archivos grandes.
 
 Componente custom de Streamlit para **validar, ajustar y crear cortes a mano**
 sobre una línea de tiempo, de modo que el pipeline **no dependa de Claude**.

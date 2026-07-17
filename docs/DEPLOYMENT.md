@@ -56,6 +56,35 @@ Todas se leen en `config.py`. Ver `.env.example` para la plantilla completa.
 
 ---
 
+## Funcionalidades opcionales
+
+Estas dos son **add-ons opcionales**: un despliegue mínimo funciona sin ellas y la
+app no se rompe si no están configuradas. En el entorno del autor quedan **activas**.
+
+### LLM local (Ollama) — alternativa a Claude
+Permite hacer el análisis y los captions con un modelo local (gratis, privado, sin
+internet) en vez de la API de Claude. Se elige con `LLM_PROVIDER`:
+- `anthropic` (default) → usa Claude; requiere `ANTHROPIC_API_KEY`.
+- `ollama` → usa un modelo local; requiere un servidor Ollama corriendo
+  (`OLLAMA_HOST`) y el modelo bajado (`OLLAMA_MODEL`, p. ej. `qwen2.5:14b`).
+
+Para un despliegue que solo use Claude, no hace falta instalar ni configurar nada
+de Ollama: se deja `LLM_PROVIDER=anthropic`.
+
+### Postiz — programar publicaciones
+Integración con Postiz (gestor de redes self-hosted) para programar/publicar los
+clips en TikTok/Instagram/YouTube desde el "Paso 6" de la app. Es **opcional**:
+- Sin `POSTIZ_API_KEY`, el Paso 6 simplemente no se activa (el resto del flujo —
+  descargar, cortar, formatear, captions, CSV — funciona igual).
+- Para habilitarlo: setear `POSTIZ_API_URL` (self-hosted termina en
+  `/api/public/v1`) y `POSTIZ_API_KEY`.
+
+> Nota: estas dos features viven en parte en archivos que pueden no estar en el
+> commit base (`modules/llm.py`, refinamientos de `modules/postiz.py`). Si un
+> despliegue las necesita, asegurate de que esos archivos estén versionados.
+
+---
+
 ## Build del componente custom `clip_editor` (Track 2)
 
 El editor visual (ver `ROADMAP.md`) es un componente React que **debe compilarse**.

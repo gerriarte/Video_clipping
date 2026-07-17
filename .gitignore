@@ -13,6 +13,9 @@ videos/
 # Modelo de MediaPipe (se descarga solo en runtime; ~3.6 MB)
 models/
 
+# Cache de forma de onda del editor de timeline (se recomputa si falta)
+*.peaks.json
+
 # Python
 .venv/
 __pycache__/
@@ -26,6 +29,7 @@ build/
 remotion/node_modules/
 remotion/out/
 components/clip_editor/frontend/node_modules/
+*.tsbuildinfo
 
 # Custom Streamlit component (Track 2): los assets COMPILADOS deben versionarse
 # para desplegar sin `npm run build`. La regla global `build/` de arriba los
