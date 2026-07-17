@@ -31,7 +31,7 @@ def ensure_proxy(video_path, height: int = 480, progress_fn=None) -> Path:
     cmd = [
         "ffmpeg", "-y", "-i", str(vp),
         "-vf", f"scale=-2:{height}",
-        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "30",
         "-c:a", "aac", "-b:a", "96k",
         "-movflags", "+faststart",
         "-loglevel", "error",
