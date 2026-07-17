@@ -5,12 +5,15 @@ import { ClipComposition, ClipCompositionProps } from "./ClipComposition";
 
 export const Root: React.FC = () => {
   const defaultProps: ClipCompositionProps = {
-    clipPath:  "",
-    subtitles: [],
-    title:     "",
-    width:     1080,
-    height:    1920,
-    fps:       30,
+    clipPath:    "",
+    title:       "",
+    width:       1080,
+    height:      1920,
+    fps:         30,
+    layout:      "fit",
+    focusX:      0.5,
+    focusTop:    0.5,
+    focusBottom: 0.5,
   };
 
   return (

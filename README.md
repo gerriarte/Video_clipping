@@ -10,9 +10,9 @@ Pipeline automatizado que descarga un video de YouTube, identifica los mejores m
 URL de YouTube
     → yt-dlp descarga el video + transcript VTT
     → Claude analiza el transcript y elige los mejores momentos
-    → El usuario selecciona cuáles cortar y en qué formato
+    → El usuario selecciona cuáles cortar y en qué formato (9:16, 1:1, 16:9 o split)
     → ffmpeg corta los clips
-    → Remotion convierte a 9:16 (fondo borroso + letterbox)
+    → Remotion renderiza en el formato elegido (recorte al hablante / dos recortes apilados)
     → Claude genera captions para cada plataforma
     → Descarga CSV con todos los datos
 ```
@@ -163,8 +163,16 @@ Elegí cuántos clips querés (1–30) y el rango de duración (10–180 segundo
 Revisá la tabla de clips identificados. Podés:
 - Marcar/desmarcar cuáles cortar
 - Editar el título y los tiempos de inicio/fin
-- Elegir el formato: **9:16 vertical** (con fondo borroso, ideal para TikTok/Reels/Shorts) o **Original 16:9**
+- Elegir el formato por clip:
+  - **9:16 vertical** — recorte que sigue al hablante (o plano completo sobre fondo borroso si es pantalla compartida)
+  - **1:1 cuadrado** — recorte cuadrado centrado en el hablante
+  - **16:9 horizontal** — plano completo original
+  - **9:16 dividido (split)** — dos recortes del mismo video apilados (un host arriba, otro abajo)
 - Seleccionar el tipo de contenido
+
+> El encuadre (a quién recorta cada formato) se decide automáticamente con detección
+> de caras. Todos los formatos se renderizan con Remotion. Los subtítulos ya no se
+> queman en el video: se agregan desde las apps de redes.
 
 Hacé clic en "Cortar clips con ffmpeg" para generar los archivos.
 
@@ -241,6 +249,16 @@ El video de YouTube debe tener subtítulos automáticos habilitados. Videos muy 
 
 **ffmpeg no encontrado**  
 Asegurate de que ffmpeg esté en el PATH del sistema. Ejecutá `ffmpeg -version` en la terminal para verificar.
+
+---
+
+## Roadmap y despliegue
+
+- **[docs/ROADMAP.md](docs/ROADMAP.md)** — plan de evolución: formato manual por
+  clip (16:9, 1:1, split), calidad visual, y el editor visual de timeline
+  (Claude-opcional). Incluye el registro de decisiones.
+- **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** — preparación para despliegue rápido
+  desde GitHub (Docker en VM, variables de entorno, build del componente custom).
 
 ---
 

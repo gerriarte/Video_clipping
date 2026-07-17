@@ -49,7 +49,7 @@ try:
     from modules.renderer    import render_clips
     from modules.caption_gen import generate_all_captions
     from modules.transcriber import transcribe_video
-    from modules.postiz      import PostizClient, build_posts_for_clip, to_utc_iso, PLATFORM_CAPTION_FIELD
+    from modules.postiz      import PostizClient, build_posts_for_clip, maybe_upload_cover, to_utc_iso, PLATFORM_CAPTION_FIELD
     CONFIG_OK    = True
     CONFIG_ERROR = None
 except EnvironmentError as e:
@@ -234,11 +234,33 @@ def copy_btn(label: str, text: str, key: str):
     )
 
 
+# ── Formatos por clip ─────────────────────────────────────────────────────────
+_FORMAT_LABELS  = {k: v["label"] for k, v in config.FORMAT_PRESETS.items()}
+_LABEL_TO_KEY   = {v: k for k, v in _FORMAT_LABELS.items()}
+_FORMAT_OPTIONS = list(_FORMAT_LABELS.values())
+# Valores viejos que pudieron quedar en el estado persistido.
+_LEGACY_FORMAT  = {"9:16 vertical": "9:16", "Original 16:9": "16:9"}
+_FORMAT_BADGE   = {"9:16": "📱 9:16", "1:1": "⬛ 1:1", "16:9": "🖥 16:9", "split": "⧉ split"}
+
+
+def normalize_format(val) -> str:
+    """Normaliza cualquier valor de formato (clave, label o legacy) a una clave."""
+    if not val:
+        return config.DEFAULT_FORMAT
+    if val in config.FORMAT_PRESETS:
+        return val
+    if val in _LEGACY_FORMAT:
+        return _LEGACY_FORMAT[val]
+    if val in _LABEL_TO_KEY:
+        return _LABEL_TO_KEY[val]
+    return config.DEFAULT_FORMAT
+
+
 def clips_to_df(clips: list) -> pd.DataFrame:
     return pd.DataFrame([{
         "✓":       c.get("_selected", True),
         "Título":  c["title"],
-        "Formato": c.get("formato", "9:16 vertical"),
+        "Formato": _FORMAT_LABELS[normalize_format(c.get("formato"))],
         "Inicio":  c["start"],
         "Fin":     c["end"],
         "Dur(s)":  round(c["end"] - c["start"], 1),
@@ -253,7 +275,7 @@ def df_to_clips(df: pd.DataFrame, original: list) -> list:
         if row["✓"]:
             clip = original[i].copy()
             clip["title"]   = row["Título"]
-            clip["formato"] = row["Formato"]
+            clip["formato"] = _LABEL_TO_KEY.get(row["Formato"], config.DEFAULT_FORMAT)
             clip["start"]   = float(row["Inicio"])
             clip["end"]     = float(row["Fin"])
             clip["type"]    = row["Tipo"]
@@ -262,13 +284,156 @@ def df_to_clips(df: pd.DataFrame, original: list) -> list:
     return result
 
 
+# ── Encuadre manual por clip ──────────────────────────────────────────────────
+
+def _clip_frame_bgr(clip: dict):
+    """Frame representativo (mitad del clip) como array BGR, cacheado por clip."""
+    key = f"_frame_{clip['index']}"
+    if key in st.session_state:
+        return st.session_state[key]
+    import cv2, tempfile, subprocess
+    dur = clip.get("clip_duration") or (clip["end"] - clip["start"])
+    t = max(0.0, float(dur) / 2)
+    tmp = Path(tempfile.mktemp(suffix=".png"))
+    subprocess.run(
+        ["ffmpeg", "-y", "-ss", f"{t:.2f}", "-i", str(clip["clip_path"]),
+         "-frames:v", "1", "-loglevel", "error", str(tmp)],
+        capture_output=True,
+    )
+    img = None
+    if tmp.exists():
+        img = cv2.imread(str(tmp))
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+    st.session_state[key] = img
+    return img
+
+
+def _crop_rect(src_w: int, src_h: int, target_aspect: float,
+               center_x: float, zoom: float, center_y: float = 0.42) -> dict:
+    """
+    Rectángulo (fracciones 0–1 de la fuente) de aspecto `target_aspect`, centrado
+    en (center_x, center_y) y acercado por `zoom` (>=1 = más cerrado). Es lo que
+    consume Remotion (manualCrops) y también el preview, así coinciden exacto.
+    """
+    S = (src_w / src_h) if src_h else (16 / 9)
+    if target_aspect <= S:      # destino más angosto que la fuente → recorte horizontal
+        rw0, rh0 = target_aspect / S, 1.0
+    else:                       # destino más ancho → recorte vertical
+        rw0, rh0 = 1.0, S / target_aspect
+    z = max(1.0, float(zoom))
+    w = rw0 / z
+    h = rh0 / z
+    x = min(max(center_x - w / 2, 0.0), max(0.0, 1.0 - w))
+    y = min(max(center_y - h / 2, 0.0), max(0.0, 1.0 - h))
+    return {"x": round(x, 5), "y": round(y, 5), "w": round(w, 5), "h": round(h, 5)}
+
+
+def _crop_from_rect(img, rect: dict):
+    """Recorta el rectángulo (fracciones) del frame BGR para el preview WYSIWYG."""
+    h, w = img.shape[:2]
+    x0 = max(0, int(round(rect["x"] * w)))
+    y0 = max(0, int(round(rect["y"] * h)))
+    x1 = min(w, int(round((rect["x"] + rect["w"]) * w)))
+    y1 = min(h, int(round((rect["y"] + rect["h"]) * h)))
+    if x1 <= x0 or y1 <= y0:
+        return img.copy()
+    return img[y0:y1, x0:x1].copy()
+
+
+def _fmt_aspect(fmt_key: str) -> float:
+    p = config.FORMAT_PRESETS[fmt_key]
+    return p["width"] / p["height"]
+
+
+def framing_controls(clip: dict) -> None:
+    """Controles de encuadre manual para un clip (9:16, 1:1 o split)."""
+    import cv2
+    fmt = normalize_format(clip.get("formato"))
+    idx = clip["index"]
+
+    if fmt == "16:9":
+        st.caption("16:9 usa el plano completo — no hay recorte que ajustar.")
+        return
+
+    img = _clip_frame_bgr(clip)
+    if img is None:
+        st.caption("⚠️ No se pudo extraer un frame para el preview.")
+        return
+    src_h, src_w = img.shape[:2]
+
+    manual = st.toggle(
+        "🎯 Elegir encuadre a mano",
+        value=clip.get("crop_manual", False),
+        key=f"cropman_{idx}",
+        help="Por defecto el recorte es automático (sigue al que habla). "
+             "Activalo para elegir a quién recortar y qué tan cerrado.",
+    )
+    clip["crop_manual"] = manual
+    if not manual:
+        return
+
+    # Preview a la IZQUIERDA, controles a la DERECHA.
+    col_prev, col_ctrl = st.columns([1, 1.6])
+
+    if fmt == "split":
+        preset = config.FORMAT_PRESETS[fmt]
+        half_aspect = preset["width"] / (preset["height"] / 2)
+        with col_ctrl:
+            st.markdown("**Arriba**")
+            top = st.slider("Posición ← →", 0.0, 1.0, float(clip.get("crop_top", 0.7)),
+                            0.01, key=f"croptop_{idx}", help="0 = izquierda · 1 = derecha")
+            zt  = st.slider("Zoom (cerrar)", 1.0, 3.0, float(clip.get("zoom_top", 1.0)),
+                            0.05, key=f"zoomtop_{idx}")
+            st.markdown("**Abajo**")
+            bot = st.slider("Posición ← →", 0.0, 1.0, float(clip.get("crop_bottom", 0.3)),
+                            0.01, key=f"cropbot_{idx}", help="0 = izquierda · 1 = derecha")
+            zb  = st.slider("Zoom (cerrar)", 1.0, 3.0, float(clip.get("zoom_bottom", 1.0)),
+                            0.05, key=f"zoombot_{idx}")
+            if st.button("↕ Intercambiar arriba/abajo", key=f"swap_{idx}"):
+                clip["crop_top"], clip["crop_bottom"] = bot, top
+                clip["zoom_top"], clip["zoom_bottom"] = zb, zt
+                for k in (f"croptop_{idx}", f"cropbot_{idx}", f"zoomtop_{idx}", f"zoombot_{idx}"):
+                    st.session_state.pop(k, None)
+                st.rerun()
+        clip["crop_top"], clip["crop_bottom"] = top, bot
+        clip["zoom_top"], clip["zoom_bottom"] = zt, zb
+        rt = _crop_rect(src_w, src_h, half_aspect, top, zt)
+        rb = _crop_rect(src_w, src_h, half_aspect, bot, zb)
+        clip["crop_rect_top"], clip["crop_rect_bottom"] = rt, rb
+        ct, cb = _crop_from_rect(img, rt), _crop_from_rect(img, rb)
+        wmin = min(ct.shape[1], cb.shape[1])
+        ct = cv2.resize(ct, (wmin, max(1, int(ct.shape[0] * wmin / ct.shape[1]))))
+        cb = cv2.resize(cb, (wmin, max(1, int(cb.shape[0] * wmin / cb.shape[1]))))
+        stacked = cv2.vconcat([ct, cb])
+        with col_prev:
+            st.image(cv2.cvtColor(stacked, cv2.COLOR_BGR2RGB),
+                     width="stretch", caption="Arriba / Abajo")
+    else:
+        with col_ctrl:
+            center = st.slider("Posición ← →", 0.0, 1.0, float(clip.get("crop_center", 0.5)),
+                               0.01, key=f"cropc_{idx}", help="0 = izquierda · 1 = derecha")
+            z = st.slider("Zoom (cerrar)", 1.0, 3.0, float(clip.get("zoom", 1.0)),
+                          0.05, key=f"zoom_{idx}")
+        clip["crop_center"], clip["zoom"] = center, z
+        rect = _crop_rect(src_w, src_h, _fmt_aspect(fmt), center, z)
+        clip["crop_rect"] = rect
+        crop = _crop_from_rect(img, rect)
+        with col_prev:
+            st.image(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB),
+                     width="stretch", caption="Recorte")
+
+
 def build_csv(clips: list, video_info: dict) -> str:
     output = io.StringIO()
     fields = [
         "video_id", "video_title", "clip_index", "clip_title",
         "start", "end", "duration", "type", "reason",
         "serie", "parte",
-        "output_path", "caption_tiktok", "caption_instagram", "caption_youtube",
+        "output_path", "cover_path",
+        "caption_tiktok", "caption_instagram", "caption_youtube",
     ]
     writer = csv.DictWriter(output, fieldnames=fields)
     writer.writeheader()
@@ -292,6 +457,7 @@ def build_csv(clips: list, video_info: dict) -> str:
             "serie":             serie,
             "parte":             parte,
             "output_path":       str(clip.get("output_path", clip.get("clip_path", ""))),
+            "cover_path":        str(clip.get("cover_path") or ""),
             "caption_tiktok":    caps.get("tiktok", ""),
             "caption_instagram": caps.get("instagram", ""),
             "caption_youtube":   caps.get("youtube", ""),
@@ -311,6 +477,18 @@ def build_channel_context() -> str:
     if hosts_block:
         ctx += f"\n\nLos hosts son:\n{hosts_block}"
     return ctx
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _list_ollama_models() -> list:
+    """Lista los modelos descargados en Ollama (vacío si no responde)."""
+    try:
+        import requests
+        r = requests.get(f"{config.OLLAMA_HOST.rstrip('/')}/api/tags", timeout=3)
+        r.raise_for_status()
+        return sorted(m["name"] for m in r.json().get("models", []))
+    except Exception:
+        return []
 
 
 # ── Sidebar: configuración del canal ─────────────────────────────────────────
@@ -341,7 +519,43 @@ with st.sidebar:
         placeholder="Ej: Educativo y cercano, con humor ocasional",
     )
 
-    st.caption("Esta info guía a Claude al analizar el video y generar los captions.")
+    st.caption("Esta info guía al modelo al analizar el video y generar los captions.")
+
+    # ── Motor de IA (proveedor + modelo) ──────────────────────────────────────
+    if CONFIG_OK:
+        st.divider()
+        st.header("Motor de IA")
+
+        _prov_labels = {"anthropic": "Anthropic (nube)", "ollama": "Ollama (local)"}
+        _prov_keys   = list(_prov_labels.keys())
+        _cur_prov    = config.LLM_PROVIDER if config.LLM_PROVIDER in _prov_keys else "anthropic"
+
+        _sel_prov = st.radio(
+            "Proveedor",
+            options=_prov_keys,
+            format_func=lambda k: _prov_labels[k],
+            index=_prov_keys.index(_cur_prov),
+            key="llm_provider_sel",
+            help="Anthropic = mejor calidad (requiere API key). Ollama = local, gratis y privado.",
+        )
+        config.LLM_PROVIDER = _sel_prov
+
+        if _sel_prov == "ollama":
+            models = _list_ollama_models()
+            if models:
+                _idx = models.index(config.OLLAMA_MODEL) if config.OLLAMA_MODEL in models else 0
+                config.OLLAMA_MODEL = st.selectbox(
+                    "Modelo local", options=models, index=_idx, key="ollama_model_sel"
+                )
+            else:
+                config.OLLAMA_MODEL = st.text_input(
+                    "Modelo local (Ollama no responde — escribí el nombre)",
+                    value=config.OLLAMA_MODEL, key="ollama_model_txt",
+                )
+                st.caption("¿Está corriendo `ollama serve`? Bajá modelos con `ollama pull qwen2.5:14b`.")
+            st.caption(f"🖥 Local · {config.OLLAMA_MODEL} — sin costo, más lento que la nube.")
+        else:
+            st.caption(f"☁ {config.CLAUDE_MODEL}")
 
 
 # ── Layout principal ──────────────────────────────────────────────────────────
@@ -622,7 +836,7 @@ if st.session_state.stage == "analyzed":
             "Título":  st.column_config.TextColumn(width="large"),
             "Formato": st.column_config.SelectboxColumn(
                 "Formato",
-                options=["9:16 vertical", "Original 16:9"],
+                options=_FORMAT_OPTIONS,
                 width="medium",
                 required=True,
             ),
@@ -687,7 +901,7 @@ if st.session_state.stage == "clipped":
     preview_cols = st.columns(min(len(clipped), 3))
     for i, clip in enumerate(clipped):
         with preview_cols[i % 3]:
-            fmt_badge = "📱 9:16" if clip.get("formato") == "9:16 vertical" else "🖥 16:9"
+            fmt_badge = _FORMAT_BADGE.get(normalize_format(clip.get("formato")), "📱 9:16")
             st.caption(f"**Clip {clip['index']}** {fmt_badge} — {clip['title']}")
             if Path(clip["clip_path"]).exists():
                 st.video(str(clip["clip_path"]))
@@ -695,6 +909,26 @@ if st.session_state.stage == "clipped":
             st.caption(f"_{clip['type']} · {m}:{s_:02d}_")
 
     st.divider()
+
+    # ── Ajustar encuadre (manual) ─────────────────────────────────────────────
+    _framable = [c for c in clipped if normalize_format(c.get("formato")) != "16:9"]
+    if _framable:
+        _n_manual = sum(1 for c in _framable if c.get("crop_manual"))
+        _hdr = "🎯 Ajustar encuadre — elegir a quién recortar"
+        if _n_manual:
+            _hdr += f"  ({_n_manual} manual)"
+        with st.expander(_hdr):
+            st.caption(
+                "Para **9:16** y **1:1** elegís a qué persona recortar cuando hay más "
+                "de una. Para **split**, quién va arriba y quién abajo. Si no activás "
+                "nada, el recorte es automático (sigue al que habla)."
+            )
+            for _clip in _framable:
+                _b = _FORMAT_BADGE.get(normalize_format(_clip.get("formato")), "")
+                st.markdown(f"**Clip {_clip['index']}** · {_b} — {_clip['title']}")
+                framing_controls(_clip)
+                st.divider()
+            save_state()
 
     # ── Buscar más clips ──────────────────────────────────────────────────────
     with st.expander("➕ Buscar más clips"):
@@ -739,7 +973,7 @@ if st.session_state.stage == "clipped":
                     "Título":  st.column_config.TextColumn(width="large"),
                     "Formato": st.column_config.SelectboxColumn(
                         "Formato",
-                        options=["9:16 vertical", "Original 16:9"],
+                        options=_FORMAT_OPTIONS,
                         width="medium",
                         required=True,
                     ),
@@ -795,41 +1029,44 @@ if st.session_state.stage == "clipped":
 
     st.divider()
 
-    vertical_clips = [c for c in clipped if c.get("formato") == "9:16 vertical"]
-    if vertical_clips:
-        st.info(f"📱 **{len(vertical_clips)}** clip{'s' if len(vertical_clips)!=1 else ''} en 9:16 — se renderizarán con Remotion antes de generar captions.")
+    # Resumen de formatos elegidos (todos se renderizan con Remotion).
+    _fmt_counts: dict[str, int] = {}
+    for c in clipped:
+        k = normalize_format(c.get("formato"))
+        _fmt_counts[k] = _fmt_counts.get(k, 0) + 1
+    _resumen = " · ".join(
+        f"{_FORMAT_BADGE.get(k, k)} ×{n}" for k, n in _fmt_counts.items()
+    )
+    st.info(f"🎬 Se renderizarán **{len(clipped)}** clips con Remotion: {_resumen}")
 
     if st.button("✍️ Generar captions con Claude", type="primary"):
-        clips_to_caption = list(clipped)
         video_id = st.session_state.video_info["video_id"]
+        out_dir  = config.OUTPUT_DIR / video_id
 
-        if vertical_clips:
-            out_dir = config.OUTPUT_DIR / video_id
-            with st.status(f"Renderizando {len(vertical_clips)} clips en 9:16…", expanded=True) as s:
-                prog_bar  = st.progress(0.0)
-                prog_text = st.empty()
-                try:
-                    def _render_progress(done: int, total: int, title: str):
-                        pct = done / total if total else 0
-                        prog_bar.progress(pct)
-                        if done < total:
-                            prog_text.caption(f"🎬 Clip {done + 1} / {total} — *{title}*")
-                        else:
-                            prog_text.caption(f"✅ {total} clip{'s' if total != 1 else ''} renderizados")
+        with st.status(f"Renderizando {len(clipped)} clips…", expanded=True) as s:
+            prog_bar  = st.progress(0.0)
+            prog_text = st.empty()
+            try:
+                def _render_progress(done: int, total: int, title: str):
+                    pct = done / total if total else 0
+                    prog_bar.progress(pct)
+                    if done < total:
+                        prog_text.caption(f"🎬 Clip {done + 1} / {total} — *{title}*")
+                    else:
+                        prog_text.caption(f"✅ {total} clip{'s' if total != 1 else ''} renderizados")
 
-                    rendered = render_clips(
-                        vertical_clips, out_dir, video_id, progress_fn=_render_progress
-                    )
-                    # Reemplazar en clips_to_caption los que se renderizaron
-                    rendered_by_idx = {c["index"]: c for c in rendered}
-                    clips_to_caption = [
-                        rendered_by_idx.get(c["index"], c) for c in clipped
-                    ]
-                    s.update(label=f"✅ {len(rendered)} clips renderizados", state="complete")
-                except Exception as e:
-                    s.update(label="❌ Error en Remotion", state="error")
-                    st.session_state["_last_error"] = f"Error en Remotion: {e}"
-                    st.stop()
+                rendered = render_clips(
+                    clipped, out_dir, video_id, progress_fn=_render_progress
+                )
+                rendered_by_idx = {c["index"]: c for c in rendered}
+                clips_to_caption = [
+                    rendered_by_idx.get(c["index"], c) for c in clipped
+                ]
+                s.update(label=f"✅ {len(rendered)} clips renderizados", state="complete")
+            except Exception as e:
+                s.update(label="❌ Error en Remotion", state="error")
+                st.session_state["_last_error"] = f"Error en Remotion: {e}"
+                st.stop()
 
         with st.status("Generando captions…", expanded=True) as s:
             try:
@@ -981,98 +1218,154 @@ if st.session_state.stage == "captioned":
                      "la fecha/hora y el intervalo de arriba.",
             )
 
-            if manual:
-                sched_df = pd.DataFrame({
-                    "Clip":   [c.get("title", "") for c in final_clips],
-                    "Cuándo": auto_times,
-                    "Plataformas": [
-                        ", ".join(
-                            p for p in sel_plats
-                            if (c.get("captions", {}).get(p) or "").strip()
-                        )
-                        for c in final_clips
-                    ],
-                })
-                edited = st.data_editor(
-                    sched_df,
-                    key="pz_sched_editor",
-                    use_container_width=True,
-                    hide_index=True,
-                    disabled=["Clip", "Plataformas"],
-                    column_config={
-                        "Cuándo": st.column_config.DatetimeColumn(
-                            "Cuándo", format="YYYY-MM-DD HH:mm", step=60, required=True
-                        ),
-                    },
-                )
-                schedule_times = [pd.Timestamp(x).to_pydatetime() for x in edited["Cuándo"]]
-            else:
-                schedule_times = auto_times
-                preview = [
-                    {
-                        "Cuándo":     schedule_times[i].strftime("%Y-%m-%d %H:%M"),
-                        "Clip":       clip.get("title", ""),
-                        "Plataformas": ", ".join(
-                            p for p in sel_plats
-                            if (clip.get("captions", {}).get(p) or "").strip()
-                        ),
-                    }
-                    for i, clip in enumerate(final_clips)
-                ]
-                st.dataframe(pd.DataFrame(preview), use_container_width=True, hide_index=True)
+            # Identidad estable de cada clip (su video de salida es único). La usamos
+            # para recordar cuáles ya se programaron y traerlos destildados.
+            def _clip_key(c):
+                return str(c.get("output_path") or c.get("clip_path") or c.get("title") or "")
 
-            n_req = len(final_clips) * 2
+            scheduled = st.session_state.setdefault("pz_scheduled", set())
+
+            sched_df = pd.DataFrame({
+                # Por defecto se marcan los que aún NO se programaron.
+                "Programar": [_clip_key(c) not in scheduled for c in final_clips],
+                "Estado":    ["✅ programado" if _clip_key(c) in scheduled else "—"
+                              for c in final_clips],
+                "Clip":      [c.get("title", "") for c in final_clips],
+                "Cuándo":    auto_times,
+                "Plataformas": [
+                    ", ".join(
+                        p for p in sel_plats
+                        if (c.get("captions", {}).get(p) or "").strip()
+                    )
+                    for c in final_clips
+                ],
+            })
+
+            # "Cuándo" editable solo en modo manual; el resto siempre de solo lectura.
+            disabled_cols = ["Estado", "Clip", "Plataformas"] + ([] if manual else ["Cuándo"])
+            edited = st.data_editor(
+                sched_df,
+                key="pz_sched_editor",
+                use_container_width=True,
+                hide_index=True,
+                disabled=disabled_cols,
+                column_config={
+                    "Programar": st.column_config.CheckboxColumn(
+                        "Programar",
+                        help="Destildá los que ya programaste para no duplicarlos.",
+                    ),
+                    "Cuándo": st.column_config.DatetimeColumn(
+                        "Cuándo", format="YYYY-MM-DD HH:mm", step=60, required=True
+                    ),
+                },
+            )
+            schedule_times = [pd.Timestamp(x).to_pydatetime() for x in edited["Cuándo"]]
+            sel_mask       = list(edited["Programar"])
+
+            n_sel = sum(bool(x) for x in sel_mask)
+            if scheduled:
+                cc1, cc2 = st.columns([3, 1])
+                cc1.caption(f"☑️ {n_sel} marcados · ✅ {len(scheduled)} ya programados en esta sesión.")
+                if cc2.button("↺ Reset marcas", key="pz_reset_sched",
+                              help="Olvida qué se programó y vuelve a marcar todos."):
+                    st.session_state["pz_scheduled"] = set()
+                    st.session_state.pop("pz_sched_editor", None)
+                    st.rerun()
+
+            n_req = n_sel * 2
             if post_type != "draft" and n_req > 30:
                 st.warning(
                     f"Son ~{n_req} requests y Postiz limita a 30/hora. "
                     "Programá por tandas o subí el intervalo."
                 )
 
-            if st.button("📤 Programar en Postiz", type="primary", disabled=not sel_plats):
+            def _run_postiz(items, post_type):
+                """
+                items: lista de (clip, when). Programa cada uno y devuelve
+                (ok, failed) donde failed es [{clip, when, error}] para reintentar.
+                """
+                client   = PostizClient()
+                channels = client.channel_map()
+                usables  = [p for p in sel_plats if p in channels]
+                faltan   = [p for p in sel_plats if p not in channels]
+                if faltan:
+                    st.write(f"⚠️ Sin canal conectado para: {faltan} (se omiten).")
+                if not usables:
+                    raise RuntimeError("Ninguna plataforma elegida tiene canal en Postiz.")
+
+                prog = st.progress(0.0)
+                ok = 0
+                failed = []
+                total = len(items)
+                for i, (clip, when) in enumerate(items):
+                    title = clip.get("title", f"clip {i+1}")
+                    vid   = Path(str(clip.get("output_path", clip.get("clip_path", ""))))
+                    try:
+                        if not vid.exists():
+                            raise FileNotFoundError(f"video no encontrado ({vid.name})")
+                        media       = client.upload(vid)
+                        cover_media = maybe_upload_cover(client, clip, usables)  # solo YouTube
+                        posts       = build_posts_for_clip(clip, channels, media, usables, cover_media=cover_media)
+                        if cover_media:
+                            st.write(f"🖼️ {title}: portada adjuntada al Short de YouTube")
+                        if not posts:
+                            st.write(f"⚠️ {title}: sin captions para las plataformas elegidas.")
+                            prog.progress((i + 1) / total)
+                            continue
+                        client.create_post(posts, to_utc_iso(when), post_type=post_type)
+                        st.write(f"✅ {title} → {when:%Y-%m-%d %H:%M} ({len(posts)} canales)")
+                        # Recordamos que este clip ya salió: la tabla lo destilda solo.
+                        st.session_state["pz_scheduled"].add(_clip_key(clip))
+                        ok += 1
+                    except Exception as ce:
+                        st.write(f"❌ {title}: {ce}")
+                        failed.append({"clip": clip, "when": when, "error": str(ce)})
+                    prog.progress((i + 1) / total)
+                return ok, failed
+
+            btn_label = f"📤 Programar {n_sel} en Postiz" if n_sel else "📤 Programar en Postiz"
+            if st.button(btn_label, type="primary", disabled=not sel_plats or n_sel == 0):
                 with st.status("Programando en Postiz…", expanded=True) as s:
                     try:
-                        client   = PostizClient()
-                        channels = client.channel_map()
-                        usables  = [p for p in sel_plats if p in channels]
-                        faltan   = [p for p in sel_plats if p not in channels]
-                        if faltan:
-                            st.write(f"⚠️ Sin canal conectado para: {faltan} (se omiten).")
-                        if not usables:
-                            raise RuntimeError("Ninguna plataforma elegida tiene canal en Postiz.")
-
-                        prog = st.progress(0.0)
-                        ok = fail = 0
-                        total = len(final_clips)
-                        for i, clip in enumerate(final_clips):
-                            title = clip.get("title", f"clip {i+1}")
-                            vid   = Path(str(clip.get("output_path", clip.get("clip_path", ""))))
-                            when  = schedule_times[i]
-
-                            if not vid.exists():
-                                st.write(f"❌ {title}: video no encontrado ({vid.name})")
-                                fail += 1
-                                prog.progress((i + 1) / total)
-                                continue
-                            try:
-                                media = client.upload(vid)
-                                posts = build_posts_for_clip(clip, channels, media, usables)
-                                if not posts:
-                                    st.write(f"⚠️ {title}: sin captions para las plataformas elegidas.")
-                                    prog.progress((i + 1) / total)
-                                    continue
-                                client.create_post(posts, to_utc_iso(when), post_type=post_type)
-                                st.write(f"✅ {title} → {when:%Y-%m-%d %H:%M} ({len(posts)} canales)")
-                                ok += 1
-                            except Exception as ce:
-                                st.write(f"❌ {title}: {ce}")
-                                fail += 1
-                            prog.progress((i + 1) / total)
-
+                        # Solo los clips tildados en la tabla.
+                        items = [
+                            (final_clips[i], schedule_times[i])
+                            for i in range(len(final_clips)) if sel_mask[i]
+                        ]
+                        ok, failed = _run_postiz(items, post_type)
+                        st.session_state["pz_failed"] = failed
+                        # Refrescamos la tabla para reflejar lo recién programado.
+                        st.session_state.pop("pz_sched_editor", None)
                         verbo = "publicados" if post_type == "now" else "programados"
                         s.update(
-                            label=f"✅ {ok} {verbo}" + (f", {fail} con error" if fail else ""),
-                            state="complete" if not fail else "error",
+                            label=f"✅ {ok} {verbo}" + (f", {len(failed)} con error" if failed else ""),
+                            state="complete" if not failed else "error",
                         )
                     except Exception as e:
                         s.update(label="❌ Error al programar en Postiz", state="error")
                         st.session_state["_last_error"] = f"Error Postiz: {e}"
+
+            # Reintento de los posts que fallaron en el último intento. Muchos
+            # fallos son cortes de red transitorios (ConnectionReset 10054): el
+            # cliente ya reintenta por su cuenta, y desde acá podés reintentar los
+            # que aun así quedaron afuera sin volver a tocar los que ya salieron.
+            pz_failed = st.session_state.get("pz_failed") or []
+            if pz_failed:
+                st.warning(f"⚠️ {len(pz_failed)} post(s) quedaron con error:")
+                for f in pz_failed:
+                    st.write(f"• **{f['clip'].get('title', '')}** — {f['error']}")
+                if st.button("🔁 Reintentar fallidos", key="pz_retry", disabled=not sel_plats):
+                    with st.status("Reintentando…", expanded=True) as s:
+                        try:
+                            items = [(f["clip"], f["when"]) for f in pz_failed]
+                            ok, failed = _run_postiz(items, post_type)
+                            st.session_state["pz_failed"] = failed
+                            st.session_state.pop("pz_sched_editor", None)
+                            verbo = "publicados" if post_type == "now" else "programados"
+                            s.update(
+                                label=f"✅ {ok} {verbo}" + (f", {len(failed)} aún con error" if failed else ""),
+                                state="complete" if not failed else "error",
+                            )
+                        except Exception as e:
+                            s.update(label="❌ Error al reintentar en Postiz", state="error")
+                            st.session_state["_last_error"] = f"Error Postiz: {e}"

@@ -10,6 +10,9 @@ clips/
 output/
 videos/
 
+# Modelo de MediaPipe (se descarga solo en runtime; ~3.6 MB)
+models/
+
 # Python
 .venv/
 __pycache__/
@@ -22,6 +25,13 @@ build/
 # Node / Remotion
 remotion/node_modules/
 remotion/out/
+components/clip_editor/frontend/node_modules/
+
+# Custom Streamlit component (Track 2): los assets COMPILADOS deben versionarse
+# para desplegar sin `npm run build`. La regla global `build/` de arriba los
+# excluiría; esta negación los rescata. Ver docs/DEPLOYMENT.md.
+!components/clip_editor/frontend/build/
+!components/clip_editor/frontend/build/**
 
 # Generated outputs
 *.csv
