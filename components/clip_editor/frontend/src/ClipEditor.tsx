@@ -30,6 +30,13 @@ const fmtTime = (s: number): string => {
   return `${m}:${sec.toString().padStart(2, "0")}.${cs}`;
 };
 
+const fmtClock = (s: number): string => {
+  if (!isFinite(s) || s < 0) s = 0;
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60);
+  return `${m}:${sec.toString().padStart(2, "0")}`;
+};
+
 const ClipEditorRaw: React.FC<ComponentProps> = ({ args, theme }) => {
   const videoUrl: string = args.video_url;
   const duration: number = args.duration || 0;
@@ -412,13 +419,18 @@ const ClipEditorRaw: React.FC<ComponentProps> = ({ args, theme }) => {
 
   const togglePlay = () => { stopAtRef.current = null; wsRef.current?.playPause(); };
 
+  const playRange = (start: number, end: number) => {
+    const ws = wsRef.current;
+    if (!ws) return;
+    ws.setTime(start);
+    stopAtRef.current = end;
+    ws.play();
+  };
+
   const playRegion = () => {
     const r = getSelected();
-    const ws = wsRef.current;
-    if (!r || !ws) { togglePlay(); return; }
-    ws.setTime(r.start);
-    stopAtRef.current = r.end;
-    ws.play();
+    if (!r) { togglePlay(); return; }
+    playRange(r.start, r.end);
   };
 
   const resetToSeed = () => {
@@ -462,8 +474,9 @@ const ClipEditorRaw: React.FC<ComponentProps> = ({ args, theme }) => {
     const lo = Math.min(ia, ib), hi = Math.max(ia, ib);
     const start = cues[lo].start, end = cues[hi].end;
     sel.removeAllRanges();
-    addRegionAt(start, end);
-    setStatus("Corte creado desde el transcript");
+    const r = addRegionAt(start, end);
+    if (r) playRange(r.start, r.end); // reproducir el fragmento recién creado
+    setStatus("Corte creado desde el transcript — reproduciendo");
   };
 
   const apply = () => {
@@ -531,7 +544,7 @@ const ClipEditorRaw: React.FC<ComponentProps> = ({ args, theme }) => {
     <div style={{ fontFamily: "Inter, system-ui, sans-serif", color: c.fg, padding: 4 }}>
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
         <div style={{ flex: "2 1 420px", minWidth: 320 }}>
-          <video ref={videoRef} src={videoUrl} playsInline preload="metadata"
+          <video ref={videoRef} src={videoUrl} playsInline controls preload="metadata"
             style={{ width: "100%", maxHeight: 300, background: "#000", borderRadius: 8, display: "block" }} />
         </div>
 
@@ -545,25 +558,40 @@ const ClipEditorRaw: React.FC<ComponentProps> = ({ args, theme }) => {
             onMouseUp={onTranscriptMouseUp}
             style={{
               height: 288, overflowY: "auto", border: `1px solid ${c.border}`,
-              borderRadius: 8, padding: 8, background: c.panel, fontSize: 13, lineHeight: 1.45,
+              borderRadius: 8, padding: 6, background: c.panel, fontSize: 13, lineHeight: 1.4,
             }}
           >
             {cues.length === 0 ? (
               <div style={{ color: c.sub }}>Sin transcript disponible.</div>
             ) : cues.map((q, i) => (
-              <span
+              <div
                 key={i}
                 data-idx={i}
                 onClick={() => seek(q.start)}
-                title={fmtTime(q.start)}
                 style={{
                   cursor: "pointer",
+                  display: "flex",
+                  gap: 8,
+                  padding: "3px 6px",
+                  marginBottom: 5,
+                  borderRadius: 6,
                   background: i === activeCue ? c.hi : "transparent",
-                  borderRadius: 4, padding: "1px 3px", marginRight: 2,
+                  borderLeft: `3px solid ${i === activeCue ? c.accent : "transparent"}`,
                 }}
               >
-                {q.text}{" "}
-              </span>
+                <button
+                  onClick={(e) => { e.stopPropagation(); playRange(q.start, q.end); }}
+                  title="Reproducir esta frase"
+                  style={{
+                    flexShrink: 0, background: "transparent", border: "none", cursor: "pointer",
+                    color: c.sub, fontSize: 11, padding: 0, fontFamily: "inherit",
+                    minWidth: 44, textAlign: "left", fontVariantNumeric: "tabular-nums",
+                  }}
+                >
+                  ▶ {fmtClock(q.start)}
+                </button>
+                <span style={{ flex: 1 }}>{q.text}</span>
+              </div>
             ))}
           </div>
         </div>
