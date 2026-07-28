@@ -1,16 +1,18 @@
 """
-Genera captions para TikTok, Instagram y YouTube usando Claude API.
+Genera captions para TikTok, Instagram y YouTube.
+
+Usa la capa `modules.llm`, que enruta a Claude (Anthropic) o a un modelo local
+(Ollama) según config.LLM_PROVIDER. La salida estructurada se garantiza con el
+JSON Schema de `_CAPTIONS_TOOL["input_schema"]`.
 """
 
-import anthropic
-
 import config
+from modules import llm
 
 
-# Forzamos tool use para garantizar salida estructurada: este modelo no admite
-# prefill y, sin esto, Claude a veces responde en prosa o agrega texto alrededor
-# del JSON (o lo trunca por max_tokens), y json.loads fallaba con "Error generando
-# captions". Con tool_choice forzado siempre recibimos un objeto válido.
+# La salida estructurada se garantiza vía JSON Schema: con Anthropic se usa como
+# herramienta forzada; con Ollama, como `format`. En ambos casos siempre recibimos
+# un objeto válido (antes, sin esto, el modelo a veces respondía en prosa).
 _CAPTIONS_TOOL = {
     "name": "submit_captions",
     "description": "Registra los captions optimizados para cada plataforma.",
@@ -48,8 +50,6 @@ def generate_captions(clip: dict, video_title: str, channel_context: str | None 
             "youtube":   str,
         }
     """
-    client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
-
     # Armar texto del clip a partir de los subtítulos
     subs = clip.get("subtitles", [])
     clip_transcript = " ".join(s["text"] for s in subs) if subs else "(sin transcript disponible)"
@@ -89,25 +89,14 @@ Basate en lo que REALMENTE se dice en la transcripción; no inventes datos ni ci
 
 Devolvé los captions llamando a la herramienta `submit_captions`."""
 
-    message = client.messages.create(
-        model=config.CLAUDE_MODEL,
+    data = llm.complete_structured(
+        prompt,
+        _CAPTIONS_TOOL["input_schema"],
+        tool_name="submit_captions",
+        tool_description=_CAPTIONS_TOOL["description"],
         max_tokens=2000,
-        tools=[_CAPTIONS_TOOL],
-        tool_choice={"type": "tool", "name": "submit_captions"},
-        messages=[{"role": "user", "content": prompt}],
+        num_ctx=8192,
     )
-
-    if message.stop_reason == "max_tokens":
-        raise ValueError(
-            "La respuesta de captions se cortó por límite de tokens. "
-            "Probá de nuevo o acortá el contexto del canal."
-        )
-
-    tool_blocks = [b for b in message.content if getattr(b, "type", None) == "tool_use"]
-    if not tool_blocks:
-        raise ValueError("Claude no devolvió captions (no llamó a la herramienta `submit_captions`).")
-
-    data = tool_blocks[0].input
     return {
         "tiktok":    data.get("tiktok", ""),
         "instagram": data.get("instagram", ""),

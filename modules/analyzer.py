@@ -1,13 +1,16 @@
 """
-Parsea el transcript VTT y usa Claude API para identificar los mejores momentos.
+Parsea el transcript VTT e identifica los mejores momentos con un LLM.
+
+El LLM puede ser Claude (Anthropic) o un modelo local (Ollama); se elige en
+config.LLM_PROVIDER y se accede vía la capa `modules.llm`.
 """
 
 import re
 import json
-import anthropic
 from pathlib import Path
 
 import config
+from modules import llm
 
 
 # ── VTT parsing ───────────────────────────────────────────────────────────────
@@ -185,8 +188,6 @@ def identify_clips(
     # Pedimos un 50% extra para compensar clips que no pasen la validación de duración
     request_n = n_clips + max(3, n_clips // 2)
 
-    client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
-
     transcript_text = cues_to_text(cues)
     # El modelo tiene contexto amplio; mandamos el transcript completo salvo que
     # sea enorme. Antes se salteaban líneas (1 de cada N), lo que fragmentaba el
@@ -256,9 +257,9 @@ Tipos válidos: insight, advice, humor, stat, story"""
     # Aumentar max_tokens proporcionalmente al número de clips solicitados
     max_tokens = min(8000, 3000 + request_n * 120)
 
-    # Forzamos tool use para garantizar salida estructurada: este modelo no
-    # admite prefill, y sin esto Claude a veces responde en prosa (ej. cuando
-    # el transcript es escaso) y el JSON no se puede parsear.
+    # Salida estructurada vía JSON Schema (tool forzado en Anthropic, `format` en
+    # Ollama). Sin esto, el modelo a veces responde en prosa (ej. transcript
+    # escaso) y el JSON no se puede parsear.
     clips_tool = {
         "name": "submit_clips",
         "description": "Registra los clips identificados para el video.",
@@ -285,34 +286,33 @@ Tipos válidos: insight, advice, humor, stat, story"""
         },
     }
 
-    message = client.messages.create(
-        model=config.CLAUDE_MODEL,
+    data = llm.complete_structured(
+        prompt,
+        clips_tool["input_schema"],
+        tool_name="submit_clips",
+        tool_description=clips_tool["description"],
         max_tokens=max_tokens,
-        tools=[clips_tool],
-        tool_choice={"type": "tool", "name": "submit_clips"},
-        messages=[{"role": "user", "content": prompt}],
+        num_ctx=config.OLLAMA_NUM_CTX_ANALYZE,
     )
+    clips = data.get("clips", [])
 
-    if message.stop_reason == "max_tokens":
-        raise ValueError(
-            "La respuesta de Claude se cortó por límite de tokens. "
-            "Probá con menos clips o un rango de duración más acotado."
-        )
-
-    tool_blocks = [b for b in message.content if getattr(b, "type", None) == "tool_use"]
-    if not tool_blocks:
-        raise ValueError("Claude no llamó a la herramienta de clips en el análisis.")
-    clips = tool_blocks[0].input.get("clips", [])
+    # Límite temporal real del video: ningún clip puede empezar/terminar fuera del
+    # transcript. Los modelos (sobre todo los locales chicos) a veces ALUCINAN
+    # timestamps más allá del final del video; acá los descartamos.
+    video_end = max((c["end"] for c in cues), default=0.0)
+    span_margin = 2.0  # tolerancia para redondeos del último cue
 
     # Validar y sanitizar cada clip; recortar a n_clips exactos
     validated = []
+    rejections = []  # (start, end, motivo) — para diagnóstico si no pasa ninguno
     for clip in clips:
         if len(validated) >= n_clips:
             break
         start = float(clip.get("start", 0))
         end   = float(clip.get("end", 0))
         duration = end - start
-        if min_secs <= duration <= max_secs:
+        within_video = 0 <= start < end <= video_end + span_margin
+        if within_video and min_secs <= duration <= max_secs:
             validated.append({
                 "start":  start,
                 "end":    end,
@@ -321,9 +321,22 @@ Tipos válidos: insight, advice, humor, stat, story"""
                 "type":   clip.get("type", "insight"),
                 "topic":  (clip.get("topic") or "").strip(),
             })
+        else:
+            if not within_video:
+                motivo = f"fuera del video (0..{video_end:.0f}s)"
+            else:
+                motivo = f"duración {duration:.0f}s fuera de [{min_secs}, {max_secs}]"
+            rejections.append((start, end, motivo))
 
     if not validated:
-        raise ValueError("Claude no devolvió clips válidos dentro del rango de duración permitido")
+        detalle = "; ".join(
+            f"[{s:.0f}→{e:.0f}s: {m}]" for s, e, m in rejections[:8]
+        ) or "el modelo no devolvió ningún clip"
+        raise ValueError(
+            f"El modelo ({llm.active_model_label()}) devolvió {len(clips)} clip(s), "
+            f"ninguno válido. Rango permitido: {min_secs}-{max_secs}s, "
+            f"video de {video_end:.0f}s. Rechazados: {detalle}"
+        )
 
     # Detectar temas en varias partes: clips que comparten `topic` se publican
     # como serie. Asigna part/part_total ordenando por tiempo de aparición.
@@ -365,12 +378,10 @@ def _assign_parts(clips: list[dict]) -> None:
 
 def _refine_titles(clips: list[dict], cues: list[dict], channel_context: str | None = None) -> list[dict]:
     """
-    Segunda pasada de Claude: extrae el transcript exacto de cada clip
+    Segunda pasada del LLM: extrae el transcript exacto de cada clip
     y genera un título preciso basado en lo que realmente se dice.
-    Una sola llamada a la API para todos los clips.
+    Una sola llamada para todos los clips.
     """
-    client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
-
     sections = []
     for i, clip in enumerate(clips):
         clip_cues = [
@@ -425,15 +436,15 @@ Devolvé un título y una razón por cada clip, EN EL MISMO ORDEN, llamando a `s
     }
 
     try:
-        message = client.messages.create(
-            model=config.CLAUDE_MODEL,
+        data = llm.complete_structured(
+            prompt,
+            titles_tool["input_schema"],
+            tool_name="submit_titles",
+            tool_description=titles_tool["description"],
             max_tokens=2000,
-            tools=[titles_tool],
-            tool_choice={"type": "tool", "name": "submit_titles"},
-            messages=[{"role": "user", "content": prompt}],
+            num_ctx=config.OLLAMA_NUM_CTX_ANALYZE,
         )
-        tool_blocks = [b for b in message.content if getattr(b, "type", None) == "tool_use"]
-        refined = tool_blocks[0].input.get("clips", []) if tool_blocks else []
+        refined = data.get("clips", [])
         for i, clip in enumerate(clips):
             if i < len(refined):
                 clip["title"]  = refined[i].get("title", clip["title"])

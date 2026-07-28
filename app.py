@@ -43,6 +43,7 @@ st.set_page_config(
 # ── Imports del pipeline ──────────────────────────────────────────────────────
 try:
     import config
+    from modules import llm
     from modules.downloader  import download_video, load_local_video
     from modules.analyzer    import parse_vtt, identify_clips, get_cues_for_clip, transcript_coverage
     from modules.clipper     import cut_clips
@@ -887,9 +888,9 @@ if st.session_state.stage == "downloaded":
             help="Rango de duración aceptado para cada clip.",
         )
 
-    if st.button("🤖 Analizar con Claude", type="primary"):
+    if st.button("🤖 AI Analyzer", type="primary"):
         with st.status("Analizando transcript…", expanded=True) as s:
-            st.write(f"Enviando {len(st.session_state.cues)} cues a Claude… (puede tardar ~20 segundos)")
+            st.write(f"Enviando {len(st.session_state.cues)} cues a {llm.active_model_label()}… (puede tardar ~20 segundos)")
             try:
                 clips = identify_clips(
                     st.session_state.cues,
