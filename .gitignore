@@ -28,6 +28,8 @@ build/
 # Node / Remotion
 remotion/node_modules/
 remotion/out/
+# Clip local para previsualizar en Remotion Studio (hardlink a clips/)
+remotion/public/
 components/clip_editor/frontend/node_modules/
 *.tsbuildinfo
 
