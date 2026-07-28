@@ -7,13 +7,23 @@ import subprocess
 from pathlib import Path
 from typing import Callable
 
+# Margen que agregamos al inicio y al final del clip para no cortar la primera
+# ni la última palabra. Es simétrico para que el ritmo del clip se sienta natural.
+PAD_LEAD = 0.25
+PAD_TAIL = 0.25
+
+
+def clip_lead(start: float) -> float:
+    """Pre-roll real aplicable al inicio (acotado si el clip arranca casi en 0)."""
+    return min(PAD_LEAD, max(0.0, start))
+
 
 def cut_clip(
     video_path: Path,
     start: float,
     end: float,
     output_path: Path,
-    pad_seconds: float = 0.25,
+    pad_seconds: float = PAD_LEAD,
     progress_fn: Callable[[str], None] | None = None,
 ) -> Path:
     """
@@ -22,8 +32,9 @@ def cut_clip(
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    actual_start = max(0.0, start - pad_seconds)
-    duration     = end - start + pad_seconds
+    lead         = min(pad_seconds, max(0.0, start))
+    actual_start = start - lead
+    duration     = (end - start) + lead + PAD_TAIL
 
     cmd = [
         "ffmpeg",
@@ -92,7 +103,15 @@ def cut_clips(
                 progress_fn(f"[{idx}/{total}] {line}")
 
         cut_clip(video_path, clip["start"], clip["end"], output_path, progress_fn=_progress)
-        results.append({**clip, "clip_path": output_path, "index": i})
+
+        lead = clip_lead(clip["start"])
+        results.append({
+            **clip,
+            "clip_path":     output_path,
+            "index":         i,
+            "lead_pad":      lead,                                  # pre-roll real del archivo
+            "clip_duration": (clip["end"] - clip["start"]) + lead + PAD_TAIL,
+        })
 
     return results
 

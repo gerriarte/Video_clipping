@@ -26,7 +26,10 @@ from pathlib import Path
 from datetime import datetime, timedelta
 
 import config
-from modules.postiz import PostizClient, build_posts_for_clip, PLATFORM_CAPTION_FIELD, to_utc_iso
+from modules.postiz import (
+    PostizClient, build_posts_for_clip, maybe_upload_cover,
+    PLATFORM_CAPTION_FIELD, to_utc_iso,
+)
 
 
 def _parse_start(s: str | None) -> datetime:
@@ -98,7 +101,9 @@ def main():
         if not platforms:
             raise SystemExit("❌ Ninguna de las plataformas pedidas tiene canal conectado en Postiz.")
 
-    n_req = len(rows) * 2  # 1 upload + 1 post por clip
+    # 1 upload + 1 post por clip; +1 por portada de YouTube cuando aplica.
+    covers = sum(1 for r in rows if (r.get("cover_path") or "").strip()) if "youtube" in platforms else 0
+    n_req  = len(rows) * 2 + covers
     print(f"\n📋 {len(rows)} clips × {len(platforms)} plataformas — modo: "
           f"{'DRY-RUN' if args.dry_run else args.type.upper()}")
     print(f"   1er post: {start:%Y-%m-%d %H:%M} (local) · cada {args.interval_hours:g} h")
@@ -106,6 +111,7 @@ def main():
         print(f"   ⚠️  Son ~{n_req} requests; Postiz limita a 30/hora. Considerá --limit o correrlo por tandas.\n")
 
     ok, fail = 0, 0
+    failed = []
     for i, row in enumerate(rows):
         when     = start + timedelta(hours=args.interval_hours * i)
         date_iso = to_utc_iso(when)
@@ -128,8 +134,11 @@ def main():
             continue
 
         try:
-            media = client.upload(vid)
-            posts = build_posts_for_clip(row, channels, media, platforms)
+            media       = client.upload(vid)
+            cover_media = maybe_upload_cover(client, row, platforms)  # solo YouTube
+            posts       = build_posts_for_clip(row, channels, media, platforms, cover_media=cover_media)
+            if cover_media:
+                print("    🖼️  Portada adjuntada al Short de YouTube")
             if not posts:
                 print("    ⚠️  Sin captions para las plataformas elegidas, se omite.")
                 continue
@@ -139,6 +148,7 @@ def main():
             ok += 1
         except Exception as e:
             print(f"    ❌ Error: {e}")
+            failed.append(title)
             fail += 1
 
     print(f"\n{'═'*50}")
@@ -146,6 +156,10 @@ def main():
         print("DRY-RUN completo (no se creó nada). Quitá --dry-run para programar.")
     else:
         print(f"Listo: {ok} programados, {fail} con error.")
+        if failed:
+            print("   Fallidos (reintentá con --limit/--start apuntando a estos clips):")
+            for t in failed:
+                print(f"     • {t}")
 
 
 if __name__ == "__main__":

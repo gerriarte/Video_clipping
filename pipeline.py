@@ -103,7 +103,7 @@ def _export_csv(clips: list[dict], csv_path: Path, video_title: str, video_id: s
         "video_id", "video_title", "clip_index", "clip_title",
         "start", "end", "duration", "type", "reason",
         "serie", "parte",
-        "clip_path", "output_path",
+        "clip_path", "output_path", "cover_path",
         "caption_tiktok", "caption_instagram", "caption_youtube",
     ]
 
@@ -127,6 +127,7 @@ def _export_csv(clips: list[dict], csv_path: Path, video_title: str, video_id: s
                 "parte":             parte,
                 "clip_path":         str(clip.get("clip_path", "")),
                 "output_path":       str(clip.get("output_path", "")),
+                "cover_path":        str(clip.get("cover_path") or ""),
                 "caption_tiktok":    captions.get("tiktok", ""),
                 "caption_instagram": captions.get("instagram", ""),
                 "caption_youtube":   captions.get("youtube", ""),
