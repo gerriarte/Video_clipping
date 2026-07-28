@@ -138,6 +138,53 @@ components/clip_editor/
 
 ---
 
+## Track 3 — Animaciones (overlays con Remotion)   📋 PLANIFICADO
+
+Generar animaciones **con Remotion** manejadas por parámetros (presets), que van
+como **capa encima del clip** en la misma composición → **sin render ni ffmpeg
+extra**. Reusa el mismo mecanismo que ya existe (props JSON → composición Remotion).
+
+### Alcance acordado (2026-07-17)
+- **3 overlays**, todos sobre el clip:
+  1. **Hook / título animado** — texto cinético (variantes `pop` / `slide-up` /
+     `typewriter`), gancho al inicio o frase destacada.
+  2. **Intro / Outro** — placa sobre los primeros/últimos N segundos (título,
+     subtítulo, logo).
+  3. **Lower-third** — barra con nombre/rol del host que entra en `start` y sale
+     en `start+dur`.
+- **Composición: overlay** (capa encima del video, no placas concatenadas).
+- **Instrucciones: presets con parámetros** (formulario, sin depender del LLM →
+  más predecible).
+
+### Modelo de datos (por clip)
+```python
+clip["overlays"] = {
+  "hook":  {"on", "text", "style", "color", "position", "start", "dur"},
+  "intro": {"on", "title", "subtitle", "logo", "dur"},
+  "outro": {"on", "text", "dur"},
+  "lower": {"on", "name", "role", "start", "dur", "position"},
+}
+```
+
+### Cambios
+| Archivo | Cambio |
+|---|---|
+| `remotion/src/ClipComposition.tsx` | Nuevo prop `overlays`; componentes `HookTitle`, `IntroCard`/`OutroCard`, `LowerThird` dibujados **después** de las capas de video (fill/fit/split/manualCrops). Timing con `useCurrentFrame`. |
+| `remotion/package.json` | `@remotion/google-fonts` (una fuente linda). |
+| `modules/renderer.py` | Pasar `overlays` en props; **pool de render** (2–3 procesos Remotion concurrentes) para el "en paralelo" (hoy es secuencial). |
+| `app.py` | Paso 4: expander "✨ Animaciones" por clip con toggles + campos de parámetros; preview real con un **still de Remotion** (1 frame). |
+
+### Notas
+- "En paralelo" se traduce en paralelizar los renders de clips (el overlay va en el
+  mismo render); un pool chico evita sobrecargar la CPU (cada render Remotion ya usa
+  concurrencia interna).
+- Esfuerzo: medio. Lo más grande son los componentes de animación (que se vean bien)
+  y el formulario. El pool es acotado.
+- Fase 2 opcional: instrucciones en **texto libre → Claude arma los props** (híbrido),
+  y placas standalone concatenadas para intros más elaboradas.
+
+---
+
 ## Palanca transversal — Más candidatos de Claude para curar (opcional, barato)
 Hoy Claude genera un 50% extra de candidatos y luego los **descarta** para quedarse
 en N exactos (`analyzer.py:189` pide de más, `analyzer.py:308` trunca). Exponer
@@ -156,3 +203,4 @@ da más material para elegir en el editor. Cambio chico, encaja en el Track 2.
 | 2026-07-17 | Encuadre del split: automático ahora (reusa clustering de caras), sliders manuales después. |
 | 2026-07-17 | Editor visual de timeline como componente custom, para independizar el pipeline de Claude. |
 | 2026-07-17 | Editor: React (plantilla oficial) + wavesurfer.js v7 (waveform + Regions) + edición de título/tipo dentro del componente. |
+| 2026-07-17 | Track 3 (animaciones): 3 overlays (hook / intro-outro / lower-third) como capa sobre el clip, con presets de parámetros (sin LLM), render en paralelo. Planificado, sin implementar. |
