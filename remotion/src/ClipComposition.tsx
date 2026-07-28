@@ -100,6 +100,28 @@ export const ClipComposition: React.FC<ClipCompositionProps> = ({
   const frame = useCurrentFrame();
   const posX  = focusAt(frame / fps, focusKeyframes, focusX);
 
+  // Sin clip: OffthreadVideo lanza "No src passed". Pasa al abrir la composición
+  // en Remotion Studio sin props (el render desde Python siempre manda clipPath).
+  if (!clipPath) {
+    return (
+      <AbsoluteFill
+        style={{
+          background:     "#111",
+          color:          "#666",
+          display:        "flex",
+          alignItems:     "center",
+          justifyContent: "center",
+          fontFamily:     "sans-serif",
+          fontSize:       48,
+          textAlign:      "center",
+          padding:        80,
+        }}
+      >
+        Sin clip: define clipPath en los props
+      </AbsoluteFill>
+    );
+  }
+
   // ── Recorte manual (con zoom): tiene prioridad sobre layout/focus ───────────
   if (manualCrops && manualCrops.length > 0) {
     if (manualCrops.length >= 2) {
