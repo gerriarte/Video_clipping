@@ -17,6 +17,18 @@ class _RangeHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *_):  # silencio
         pass
 
+    def handle_one_request(self):
+        """
+        Igual que el original, pero sin escupir el traceback cuando el cliente
+        corta la conexión. Chromium (Remotion) abre y cierra sockets todo el
+        tiempo mientras busca frames; con varios renders en paralelo eso llenaba
+        la consola de ConnectionResetError que no significan nada.
+        """
+        try:
+            super().handle_one_request()
+        except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+            self.close_connection = True
+
     def _send_file(self, head_only: bool = False):
         path = self.translate_path(self.path)
         if not os.path.isfile(path):

@@ -170,6 +170,44 @@ Revisá la tabla de clips identificados. Podés:
   - **9:16 dividido (split)** — dos recortes del mismo video apilados (un host arriba, otro abajo)
 - Seleccionar el tipo de contenido
 
+**Ver el video antes de elegir formato** — el panel "👁 Ver el video y elegir formato"
+muestra, para cada tramo, tres fotos representativas y un reproductor del tramo, sin
+necesidad de cortarlo primero.
+
+Además analiza la toma: muestrea el tramo cada ~3 s (≈24 muestras) y mide **cuánto
+tiempo** hay dos personas en cuadro. Con eso marca con ⭐ el formato sugerido y
+muestra la evidencia:
+
+- `👥 2 personas en el 88% del clip (24 muestras)` → sugiere **split**
+- `👤 1 persona en el 92% del clip` → sugiere **9:16**
+- `🔀 cambia de plano — 2 personas en el 38% del clip` → la toma alterna; ningún
+  formato único queda bien en todo el clip, conviene mirarlo
+
+Podés aplicar todas las sugerencias de una, o elegir el formato clip por clip ahí
+mismo (la tabla se actualiza sola).
+
+**🔀 Seguir la toma** (checkbox por clip) — para los clips que alternan planos: el
+recorte cambia *dentro* del clip, split mientras están los dos en cuadro y recorte
+cerrado al hablante cuando la cámara va a uno solo. Las dimensiones del archivo no
+cambian nunca (un mp4 no puede cambiar de aspecto a mitad de camino); lo que cambia
+es cómo se recorta el mismo lienzo. Si el clip no cambia de plano, el render usa un
+layout fijo y este ajuste no hace nada.
+
+> El conteo se hace con Haar (frontal + perfil), que también detecta como caras los
+> dibujos y peluches del set. Por eso las etiquetas dicen "2+ personas" y nunca un
+> número exacto: para elegir formato alcanza con saber si hay una o más de una.
+
+**Cómo se corta** — dos opciones antes de darle a cortar:
+- **🎧 Ajustar los bordes al audio** (activado por defecto) — los tiempos del
+  transcript traen 1–2 s de error; esto pega el inicio y el fin a la pausa real más
+  cercana (hasta 1,5 s) para que el clip no arranque ni termine con media palabra.
+- **✂️ Sacar silencios internos (jump cuts)** — elimina las pausas de más de 0,7 s
+  dentro del clip y pega los trozos con un fundido corto. Acelera el ritmo; en
+  charlas pausadas puede sonar brusco.
+
+El audio siempre se normaliza a **-14 LUFS**, que es el nivel que usan TikTok,
+Instagram y Shorts.
+
 > El encuadre (a quién recorta cada formato) se decide automáticamente con detección
 > de caras. Todos los formatos se renderizan con Remotion. Los subtítulos ya no se
 > queman en el video: se agregan desde las apps de redes.
@@ -178,6 +216,22 @@ Hacé clic en "Cortar clips con ffmpeg" para generar los archivos.
 
 **Paso 4 — Preview y captions**  
 Previsualizá cada clip y hacé clic en "Generar captions con Claude". Si hay clips en 9:16, Remotion los renderiza primero. Luego Claude genera captions optimizados para TikTok, Instagram y YouTube Shorts. Podés copiarlos directamente desde la interfaz.
+
+**🎯 Ajustar formato y encuadre** — se trabaja **un clip por vez** (lo elegís en el
+desplegable). Ahí podés:
+
+- **Cambiar el formato** aunque el clip ya esté cortado. El corte es el mismo para
+  los cuatro formatos: el formato solo afecta al render, así que corregir una
+  elección mala no obliga a volver a cortar. En el Paso 5, además, el cambio de
+  formato está junto a "🔄 Re-renderizar este clip".
+- **Elegir el encuadre a mano** (a quién recorta, y en split quién va arriba). El
+  recorte se previsualiza en **tres momentos** del clip (arranque / medio / final),
+  así ves si la persona se corre y el encuadre la pierde antes de pagar un render
+  entero. Con "🔍 Ver el preview grande" mirás uno solo a todo el ancho.
+
+> Los clips se renderizan de a 2 en paralelo. Se ajusta con la variable de entorno
+> `RENDER_CONCURRENCY` — bajala a 1 si la máquina se queda sin memoria (cada render
+> levanta su propio Chromium), subila si te sobra.
 
 **Descarga CSV**  
 Al finalizar podés descargar un CSV con todos los clips, tiempos, paths de archivo y captions para cada plataforma.

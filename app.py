@@ -52,8 +52,9 @@ try:
     from modules.transcriber import transcribe_video
     from modules.postiz      import PostizClient, build_posts_for_clip, maybe_upload_cover, to_utc_iso, PLATFORM_CAPTION_FIELD
     from modules.peaks       import compute_peaks
-    from modules.proxy       import ensure_proxy
+    from modules.proxy       import ensure_proxy, proxy_path_for
     from modules.media_server import MediaServer
+    from modules.segment_preview import analyze_segment
     from components.clip_editor import clip_editor
     CONFIG_OK    = True
     CONFIG_ERROR = None
@@ -68,7 +69,9 @@ except ImportError:
     WHISPER_AVAILABLE = False
 
 # ── Persistencia de estado en disco ──────────────────────────────────────────
-_STATE_FILE = Path(__file__).parent / ".pipeline_state.json"
+_STATE_FILE = Path(
+    os.environ.get("ZUMO_STATE_FILE") or (Path(__file__).parent / ".pipeline_state.json")
+)
 
 
 def _paths_to_str(obj):
@@ -289,31 +292,158 @@ def df_to_clips(df: pd.DataFrame, original: list) -> list:
     return result
 
 
+def merge_df_into_clips(df: pd.DataFrame, original: list) -> list:
+    """
+    Vuelca lo editado en la tabla sobre TODOS los clips (no solo los tildados).
+
+    Hace falta porque el panel de preview cambia el formato con botones, y cada
+    botón dispara un rerun: si no persistiéramos la tabla antes, se perderían los
+    títulos/tiempos que el usuario acababa de editar.
+    """
+    merged = []
+    for i, row in df.iterrows():
+        clip = original[i].copy()
+        clip["_selected"] = bool(row["✓"])
+        clip["title"]     = row["Título"]
+        clip["formato"]   = _LABEL_TO_KEY.get(row["Formato"], config.DEFAULT_FORMAT)
+        clip["start"]     = float(row["Inicio"])
+        clip["end"]       = float(row["Fin"])
+        clip["type"]      = row["Tipo"]
+        clip["reason"]    = row["Razón"]
+        merged.append(clip)
+    return merged
+
+
+# ── Preview del tramo antes de elegir el formato ──────────────────────────────
+# El formato se elige cuando el clip TODAVÍA no se cortó, así que sin esto la
+# decisión es a ciegas. Sacamos fotos del tramo del video original y contamos
+# personas para sugerir "split" (dos) o 9:16 (una).
+
+def segment_analysis(clip: dict, info: dict) -> dict:
+    """Análisis de la toma del tramo, cacheado por tramo (sesión + disco)."""
+    # El sufijo de versión evita leer análisis viejos (de otra forma) que hayan
+    # quedado en la sesión con menos campos.
+    key = f"_segprev2_{info.get('video_id','')}_{clip['start']:.2f}_{clip['end']:.2f}"
+    if key not in st.session_state:
+        st.session_state[key] = analyze_segment(
+            info["video_path"], clip["start"], clip["end"],
+            video_id=info.get("video_id", "video"),
+        )
+    return st.session_state[key]
+
+
+def shot_badge(analysis: dict) -> str:
+    """
+    Cómo es la toma, con el número que lo respalda.
+
+    Se muestra el PORCENTAJE del clip, no un "hay 2 personas" a secas: en un
+    episodio que alterna plano general y primer plano, el promedio es la única
+    respuesta honesta (y es la que decide el formato).
+    """
+    n    = analysis.get("samples", 0)
+    two  = analysis.get("two_shot_ratio", 0.0)
+    solo = analysis.get("solo_ratio", 0.0)
+    if not n:
+        return "🙈 sin análisis"
+    if analysis.get("mixed"):
+        return f"🔀 cambia de plano — 2 personas en el {two*100:.0f}% del clip"
+    if two >= 0.45:
+        return f"👥 2 personas en el {two*100:.0f}% del clip ({n} muestras)"
+    if analysis.get("empty_ratio", 0) >= 0.6:
+        return f"🖥 casi sin caras — plano abierto o pantalla ({n} muestras)"
+    return f"👤 1 persona en el {solo*100:.0f}% del clip ({n} muestras)"
+
+
+def segment_video_url(info: dict) -> str:
+    """URL del video para el reproductor: proxy 480p si ya existe, si no el original."""
+    src = Path(info["video_path"])
+    proxy = proxy_path_for(src)
+    if proxy.exists() and proxy.stat().st_size > 0:
+        src = proxy
+    return get_media_server().url_for(src)
+
+
+def segment_player(url: str, start: float, end: float, height: int = 260) -> None:
+    """
+    Reproduce SOLO el tramo del video completo (sin cortar ni recodificar nada).
+
+    Se apoya en el mismo server con Range del editor de timeline: el navegador
+    pide únicamente los bytes de ese tramo, aunque el episodio pese varios GB.
+    """
+    st.components.v1.html(
+        f"""
+        <video controls preload="metadata" playsinline
+               style="width:100%;border-radius:8px;background:#000"
+               onloadedmetadata="this.currentTime={start:.2f}"
+               ontimeupdate="if(this.currentTime>{end:.2f}||this.currentTime<{start:.2f}-1)
+                             {{this.pause();this.currentTime={start:.2f}}}">
+          <source src="{url}#t={start:.2f},{end:.2f}" type="video/mp4">
+        </video>""",
+        height=height,
+    )
+
+
+def format_picker(clip: dict, key_prefix: str, suggested: str = "") -> None:
+    """
+    Botones de formato para un clip (el activo va resaltado). Rerun al cambiar.
+
+    Escribe en el dict del clip, así sirve igual antes de cortar (Paso 3) que
+    después (Pasos 4 y 5): el formato solo afecta al render, nunca al corte.
+    """
+    current = normalize_format(clip.get("formato"))
+    cols = st.columns(len(config.FORMAT_PRESETS))
+    for col, (key, preset) in zip(cols, config.FORMAT_PRESETS.items()):
+        label = _FORMAT_BADGE.get(key, preset["label"])
+        if key == suggested and key != current:
+            label += " ⭐"
+        clicked = col.button(
+            label,
+            key=f"{key_prefix}_{key}",
+            use_container_width=True,
+            type="primary" if key == current else "secondary",
+            help=preset["label"] + (" — sugerido" if key == suggested else ""),
+        )
+        if clicked and key != current:
+            clip["formato"] = key
+            # Que la tabla del Paso 3 se vuelva a sembrar con el valor nuevo.
+            st.session_state.clips_editor_rev += 1
+            save_state()
+            st.rerun()
+
+
 # ── Encuadre manual por clip ──────────────────────────────────────────────────
 
-def _clip_frame_bgr(clip: dict):
-    """Frame representativo (mitad del clip) como array BGR, cacheado por clip."""
-    key = f"_frame_{clip['index']}"
+# Momentos del clip que se previsualizan al encuadrar. Con uno solo no se ve si
+# la persona se mueve y el recorte la pierde a mitad de camino.
+_FRAMING_FRACTIONS = (0.25, 0.5, 0.75)
+
+
+def _clip_frames_bgr(clip: dict) -> list:
+    """Frames repartidos a lo largo del clip (BGR), cacheados por clip."""
+    key = f"_frames_{clip['index']}"
     if key in st.session_state:
         return st.session_state[key]
     import cv2, tempfile, subprocess
     dur = clip.get("clip_duration") or (clip["end"] - clip["start"])
-    t = max(0.0, float(dur) / 2)
-    tmp = Path(tempfile.mktemp(suffix=".png"))
-    subprocess.run(
-        ["ffmpeg", "-y", "-ss", f"{t:.2f}", "-i", str(clip["clip_path"]),
-         "-frames:v", "1", "-loglevel", "error", str(tmp)],
-        capture_output=True,
-    )
-    img = None
-    if tmp.exists():
-        img = cv2.imread(str(tmp))
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
-    st.session_state[key] = img
-    return img
+    imgs = []
+    for frac in _FRAMING_FRACTIONS:
+        t = max(0.0, float(dur) * frac)
+        tmp = Path(tempfile.mktemp(suffix=".png"))
+        subprocess.run(
+            ["ffmpeg", "-y", "-ss", f"{t:.2f}", "-i", str(clip["clip_path"]),
+             "-frames:v", "1", "-loglevel", "error", str(tmp)],
+            capture_output=True,
+        )
+        if tmp.exists():
+            img = cv2.imread(str(tmp))
+            if img is not None:
+                imgs.append(img)
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+    st.session_state[key] = imgs
+    return imgs
 
 
 from modules.framing import crop_rect as _crop_rect, crop_from_rect as _crop_from_rect
@@ -345,6 +475,44 @@ def _face_center_y(img) -> float:
     return 0.42
 
 
+def _rerun_here() -> None:
+    """
+    Rerun del bloque actual, sin recargar toda la página si estamos en un
+    fragment (que es lo que hace saltar el scroll).
+    """
+    try:
+        st.rerun(scope="fragment")
+    except Exception:
+        st.rerun()
+
+
+_FRAMING_LABELS = ("arranque", "medio", "final")
+
+
+def _framing_preview(frames: list, crop_fn, big: bool = False) -> None:
+    """
+    Muestra el recorte aplicado a varios momentos del clip.
+
+    En modo `big` se muestra solo el del medio, a todo el ancho: los tres juntos
+    sirven para ver si el encuadre aguanta, pero para afinarlo hace falta verlo
+    grande.
+    """
+    import cv2
+    if big:
+        frame = frames[len(frames) // 2]
+        st.image(cv2.cvtColor(crop_fn(frame), cv2.COLOR_BGR2RGB),
+                 width="stretch", caption="medio")
+        return
+    cols = st.columns(len(frames))
+    for i, (col, frame) in enumerate(zip(cols, frames)):
+        with col:
+            st.image(
+                cv2.cvtColor(crop_fn(frame), cv2.COLOR_BGR2RGB),
+                width="stretch",
+                caption=_FRAMING_LABELS[i] if i < len(_FRAMING_LABELS) else "",
+            )
+
+
 def framing_controls(clip: dict) -> None:
     """Controles de encuadre manual para un clip (9:16, 1:1 o split)."""
     import cv2
@@ -355,10 +523,11 @@ def framing_controls(clip: dict) -> None:
         st.caption("16:9 usa el plano completo — no hay recorte que ajustar.")
         return
 
-    img = _clip_frame_bgr(clip)
-    if img is None:
+    frames = _clip_frames_bgr(clip)
+    if not frames:
         st.caption("⚠️ No se pudo extraer un frame para el preview.")
         return
+    img = frames[len(frames) // 2]          # el del medio manda para los defaults
     src_h, src_w = img.shape[:2]
 
     manual = st.toggle(
@@ -370,6 +539,17 @@ def framing_controls(clip: dict) -> None:
     )
     clip["crop_manual"] = manual
     if not manual:
+        # Sin encuadre manual, la otra opción es que el recorte siga la toma.
+        # Con encuadre manual no se ofrece: sería contradictorio (y en el render
+        # gana el manual, que es la decisión explícita del usuario).
+        follow = st.checkbox(
+            "🔀 Seguir la toma (cambiar el recorte cuando cambia el plano)",
+            value=bool(clip.get("follow_shot")),
+            key=f"followf_{idx}",
+            help="Split mientras están los dos en cuadro y recorte cerrado cuando "
+                 "la cámara va a uno solo, dentro del mismo clip.",
+        )
+        clip["follow_shot"] = follow
         return
 
     # Default vertical basado en la cara detectada (headroom), cacheado.
@@ -377,8 +557,15 @@ def framing_controls(clip: dict) -> None:
         clip["crop_cy_default"] = _face_center_y(img)
     cy_def = clip["crop_cy_default"]
 
-    # Preview a la IZQUIERDA, controles a la DERECHA.
-    col_prev, col_ctrl = st.columns([1, 1.6])
+    big = st.checkbox(
+        "🔍 Ver el preview grande", key=f"cropbig_{idx}",
+        help="Muestra solo el momento del medio, a todo el ancho.",
+    )
+
+    # Preview a la IZQUIERDA, controles a la DERECHA. Se previsualiza en varios
+    # momentos del clip: con uno solo no se ve si la persona se corre y el
+    # recorte la pierde a la mitad.
+    col_prev, col_ctrl = st.columns([2, 1.2])
 
     if fmt == "split":
         preset = config.FORMAT_PRESETS[fmt]
@@ -405,21 +592,23 @@ def framing_controls(clip: dict) -> None:
                 for k in (f"croptop_{idx}", f"cropbot_{idx}", f"zoomtop_{idx}",
                           f"zoombot_{idx}", f"cyt_{idx}", f"cyb_{idx}"):
                     st.session_state.pop(k, None)
-                st.rerun()
+                _rerun_here()
         clip["crop_top"], clip["crop_bottom"] = top, bot
         clip["zoom_top"], clip["zoom_bottom"] = zt, zb
         clip["crop_cy_top"], clip["crop_cy_bottom"] = vyt, vyb
         rt = _crop_rect(src_w, src_h, half_aspect, top, zt, center_y=vyt)
         rb = _crop_rect(src_w, src_h, half_aspect, bot, zb, center_y=vyb)
         clip["crop_rect_top"], clip["crop_rect_bottom"] = rt, rb
-        ct, cb = _crop_from_rect(img, rt), _crop_from_rect(img, rb)
-        wmin = min(ct.shape[1], cb.shape[1])
-        ct = cv2.resize(ct, (wmin, max(1, int(ct.shape[0] * wmin / ct.shape[1]))))
-        cb = cv2.resize(cb, (wmin, max(1, int(cb.shape[0] * wmin / cb.shape[1]))))
-        stacked = cv2.vconcat([ct, cb])
+
+        def _stacked(frame, _rt=rt, _rb=rb):
+            ct, cb = _crop_from_rect(frame, _rt), _crop_from_rect(frame, _rb)
+            wmin = min(ct.shape[1], cb.shape[1])
+            ct = cv2.resize(ct, (wmin, max(1, int(ct.shape[0] * wmin / ct.shape[1]))))
+            cb = cv2.resize(cb, (wmin, max(1, int(cb.shape[0] * wmin / cb.shape[1]))))
+            return cv2.vconcat([ct, cb])
+
         with col_prev:
-            st.image(cv2.cvtColor(stacked, cv2.COLOR_BGR2RGB),
-                     width="stretch", caption="Arriba / Abajo")
+            _framing_preview(frames, _stacked, big=big)
     else:
         with col_ctrl:
             center = st.slider("Posición ← →", 0.0, 1.0, float(clip.get("crop_center", 0.5)),
@@ -431,10 +620,54 @@ def framing_controls(clip: dict) -> None:
         clip["crop_center"], clip["crop_cy"], clip["zoom"] = center, vy, z
         rect = _crop_rect(src_w, src_h, _fmt_aspect(fmt), center, z, center_y=vy)
         clip["crop_rect"] = rect
-        crop = _crop_from_rect(img, rect)
         with col_prev:
-            st.image(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB),
-                     width="stretch", caption="Recorte")
+            _framing_preview(frames, lambda frame: _crop_from_rect(frame, rect), big=big)
+
+
+@st.fragment
+def framing_panel(clipped: list) -> None:
+    """
+    Ajustar formato y encuadre de UN clip.
+
+    Es un `fragment`: mover un slider re-ejecuta solo este bloque en vez de toda
+    la página, así no se pierde la posición del scroll ni se vuelven a dibujar
+    los videos de arriba (que es lo que hacía sentir la pantalla "rota" al
+    ajustar). El cambio de formato sí hace un rerun completo a propósito: cambia
+    los badges y el resumen de render que están fuera del fragment.
+    """
+    sel = st.selectbox(
+        "Clip a ajustar",
+        range(len(clipped)),
+        format_func=lambda i: (
+            f"Clip {clipped[i]['index']} · "
+            f"{_FORMAT_BADGE.get(normalize_format(clipped[i].get('formato')), '')} — "
+            f"{clipped[i]['title'][:70]}"
+        ),
+        key="framing_clip_sel",
+    )
+    clip = clipped[sel]
+
+    st.markdown("**Formato**")
+    format_picker(clip, f"p4fmt_{clip['index']}")
+    st.caption("Cambiar el formato acá no re-corta nada; se aplica en el render.")
+
+    st.markdown("**Encuadre**")
+    st.caption(
+        "Para **9:16** y **1:1** elegís a qué persona recortar cuando hay más "
+        "de una. Para **split**, quién va arriba y quién abajo. Si no activás "
+        "nada, el recorte es automático (sigue al que habla) — o podés dejar "
+        "que **siga la toma** y cambie de recorte cuando cambia el plano."
+    )
+    framing_controls(clip)
+    save_state()
+
+
+@st.fragment
+def clip_framing_fragment(clip: dict) -> None:
+    """Encuadre de un clip ya renderizado (Paso 5), aislado del resto de la página."""
+    if st.checkbox("🎯 Ver y ajustar el encuadre", key=f"p5frame_{clip['index']}"):
+        framing_controls(clip)
+        save_state()
 
 
 # ── Editor de timeline (componente custom) ────────────────────────────────────
@@ -1046,10 +1279,112 @@ if st.session_state.stage == "analyzed":
         key=f"clips_editor_{st.session_state.clips_editor_rev}",
     )
 
-    approved = df_to_clips(edited_df, st.session_state.clips)
+    # Persistimos lo editado antes de dibujar el preview: sus botones hacen rerun.
+    st.session_state.clips = merge_df_into_clips(edited_df, st.session_state.clips)
+    approved = [c for c in st.session_state.clips if c.get("_selected", True)]
+
+    # ── Previsualizar el tramo antes de elegir formato ────────────────────────
+    _info = st.session_state.video_info
+    if _info and approved:
+        with st.expander("👁 Ver el video y elegir formato", expanded=False):
+            st.caption(
+                "Cada tramo se muestrea cada ~3 s para ver **cuánto tiempo** hay dos "
+                "personas en cuadro: si son la mayor parte del clip conviene ⧉ split "
+                "(una arriba, otra abajo); si hay una sola, 📱 9:16. La ⭐ es la "
+                "sugerencia y el porcentaje es la evidencia — el formato lo elegís vos."
+            )
+
+            with st.spinner("Analizando la toma de cada tramo (la primera vez tarda un poco)…"):
+                analyses = {}
+                for _pos, _clip in enumerate(st.session_state.clips):
+                    if _clip.get("_selected", True):
+                        analyses[_pos] = segment_analysis(_clip, _info)
+
+            _sugeridos = [
+                p for p, a in analyses.items()
+                if a["suggestion"] != normalize_format(st.session_state.clips[p].get("formato"))
+            ]
+            _n_sug = len(_sugeridos)
+            if _n_sug and st.button(
+                "⭐ Aplicar el formato sugerido" if _n_sug == 1
+                else f"⭐ Aplicar los {_n_sug} formatos sugeridos",
+                key="apply_all_suggested",
+            ):
+                for p in _sugeridos:
+                    st.session_state.clips[p]["formato"] = analyses[p]["suggestion"]
+                st.session_state.clips_editor_rev += 1
+                save_state()
+                st.rerun()
+
+            for _pos, _analysis in analyses.items():
+                _clip = st.session_state.clips[_pos]
+                _m, _s = divmod(int(_clip["end"] - _clip["start"]), 60)
+                st.markdown(
+                    f"**{_clip['title']}** · {shot_badge(_analysis)} · {_m}:{_s:02d} "
+                    f"({_clip['start']:.0f}s → {_clip['end']:.0f}s)"
+                )
+
+                _c_img, _c_ctrl = st.columns([2, 1.4])
+                with _c_img:
+                    _thumbs = _analysis.get("thumbs") or []
+                    if _thumbs:
+                        _fcols = st.columns(len(_thumbs))
+                        for _fi, (_frame, _label) in enumerate(_thumbs):
+                            with _fcols[_fi]:
+                                st.image(str(_frame), width="stretch", caption=_label)
+                    else:
+                        st.caption("⚠️ No se pudieron extraer fotos de este tramo.")
+                    # El server HTTP se levanta recién si alguien pide ver el video.
+                    if st.toggle("▶ Ver el tramo en video", key=f"segplay_{_pos}"):
+                        segment_player(
+                            segment_video_url(_info), _clip["start"], _clip["end"]
+                        )
+
+                with _c_ctrl:
+                    st.caption(
+                        f"Formato actual: **{_FORMAT_LABELS[normalize_format(_clip.get('formato'))]}**"
+                        f"  ·  sugerido: **{_FORMAT_LABELS[_analysis['suggestion']]}**"
+                    )
+                    format_picker(_clip, f"segfmt_{_pos}", _analysis["suggestion"])
+
+                    # Seguir la toma: solo tiene sentido si hay recorte (16:9 usa
+                    # el plano entero) y si el clip efectivamente cambia de plano.
+                    if normalize_format(_clip.get("formato")) != "16:9":
+                        _follow = st.checkbox(
+                            "🔀 Seguir la toma",
+                            value=bool(_clip.get("follow_shot")),
+                            key=f"follow_{_pos}_{st.session_state.clips_editor_rev}",
+                            help="El recorte cambia dentro del clip: split mientras "
+                                 "están los dos en cuadro y recorte cerrado cuando la "
+                                 "cámara va a uno solo. Las dimensiones no cambian.",
+                        )
+                        if _follow != bool(_clip.get("follow_shot")):
+                            _clip["follow_shot"] = _follow
+                            save_state()
+                        if _analysis.get("mixed") and not _follow:
+                            st.caption("↑ este clip alterna planos: acá se nota")
+
+                st.divider()
+
     n_sel = len(approved)
     st.info(f"**{n_sel} de {total_clips} clips seleccionados** para cortar"
             + ("" if n_sel else " — seleccioná al menos uno para continuar"))
+
+    # ── Cómo cortar (ajustes guiados por el audio) ────────────────────────────
+    col_snap, col_jump = st.columns(2)
+    snap_to_audio = col_snap.checkbox(
+        "🎧 Ajustar los bordes al audio", value=True, key="cut_snap",
+        help="Los tiempos vienen del transcript de YouTube y traen 1–2 s de error. "
+             "Esto pega el inicio y el fin a la pausa más cercana (hasta 1,5 s) "
+             "para que el clip no arranque ni termine con media palabra.",
+    )
+    remove_silences = col_jump.checkbox(
+        "✂️ Sacar silencios internos (jump cuts)", value=False, key="cut_jumpcuts",
+        help="Elimina las pausas de más de 0,7 s dentro del clip y pega los "
+             "trozos. Acelera el ritmo; en charlas pausadas puede sonar brusco.",
+    )
+    st.caption("El audio siempre se normaliza a -14 LUFS (el nivel que usan TikTok, "
+               "Instagram y Shorts).")
 
     if st.button(
         "✂️ Cortar clips con ffmpeg", type="primary", disabled=len(approved) == 0
@@ -1063,6 +1398,8 @@ if st.session_state.stage == "analyzed":
                     config.CLIPS_DIR,
                     st.session_state.video_info["video_id"],
                     progress_fn=make_live_logger(log_box),
+                    snap_to_audio=snap_to_audio,
+                    remove_silences=remove_silences,
                 )
                 for clip in clipped:
                     clip["subtitles"] = get_cues_for_clip(
@@ -1100,30 +1437,28 @@ if st.session_state.stage == "clipped":
             st.caption(f"**Clip {clip['index']}** {fmt_badge} — {clip['title']}")
             if Path(clip["clip_path"]).exists():
                 st.video(str(clip["clip_path"]))
-            m, s_ = divmod(int(clip["end"] - clip["start"]), 60)
-            st.caption(f"_{clip['type']} · {m}:{s_:02d}_")
+            m, s_ = divmod(int(clip.get("clip_duration") or (clip["end"] - clip["start"])), 60)
+            _extra = ""
+            if clip.get("silence_removed"):
+                _extra = f" · −{clip['silence_removed']:.1f}s de silencio"
+            st.caption(f"_{clip['type']} · {m}:{s_:02d}{_extra}_")
 
     st.divider()
 
-    # ── Ajustar encuadre (manual) ─────────────────────────────────────────────
-    _framable = [c for c in clipped if normalize_format(c.get("formato")) != "16:9"]
-    if _framable:
-        _n_manual = sum(1 for c in _framable if c.get("crop_manual"))
-        _hdr = "🎯 Ajustar encuadre — elegir a quién recortar"
-        if _n_manual:
-            _hdr += f"  ({_n_manual} manual)"
-        with st.expander(_hdr):
-            st.caption(
-                "Para **9:16** y **1:1** elegís a qué persona recortar cuando hay más "
-                "de una. Para **split**, quién va arriba y quién abajo. Si no activás "
-                "nada, el recorte es automático (sigue al que habla)."
-            )
-            for _clip in _framable:
-                _b = _FORMAT_BADGE.get(normalize_format(_clip.get("formato")), "")
-                st.markdown(f"**Clip {_clip['index']}** · {_b} — {_clip['title']}")
-                framing_controls(_clip)
-                st.divider()
-            save_state()
+    # ── Ajustar formato y encuadre ────────────────────────────────────────────
+    # Se trabaja UN clip por vez a propósito: dibujar los 15 en cada movimiento
+    # de slider hacía todo lento y el preview quedaba diminuto. Y no es un
+    # expander: al cambiar su título (p. ej. "(1 manual)") Streamlit lo trata
+    # como un elemento nuevo y lo colapsa justo cuando estabas ajustando.
+    if clipped:
+        _open = st.toggle(
+            "🎯 Ajustar formato y encuadre",
+            key="framing_open",
+            help="Cambiar el formato de un clip o elegir a quién recorta. "
+                 "No hace falta volver a cortar: el formato solo afecta al render.",
+        )
+        if _open:
+            framing_panel(clipped)
 
     # ── Buscar más clips ──────────────────────────────────────────────────────
     with st.expander("➕ Buscar más clips"):
@@ -1202,6 +1537,9 @@ if st.session_state.stage == "clipped":
                             st.session_state.video_info["video_id"],
                             progress_fn=make_live_logger(log_box),
                             start_index=next_idx,
+                            # Mismos ajustes de audio que eligió arriba para el lote principal.
+                            snap_to_audio=st.session_state.get("cut_snap", True),
+                            remove_silences=st.session_state.get("cut_jumpcuts", False),
                         )
                         for clip in extra_clipped:
                             clip["subtitles"] = get_cues_for_clip(
@@ -1312,6 +1650,15 @@ if st.session_state.stage == "captioned":
                 if vid_path and Path(str(vid_path)).exists():
                     st.video(str(vid_path))
                 st.caption(clip.get("reason", ""))
+
+                # Cambiar el formato acá y re-renderizar: si ves el clip ya
+                # armado y el recorte no era el que querías, no hay que volver
+                # a cortar nada (el corte es el mismo para todos los formatos).
+                format_picker(clip, f"p5fmt_{clip['index']}")
+                st.caption("Cambiá el formato y tocá **Re-renderizar** — no hace "
+                           "falta volver a cortar.")
+                clip_framing_fragment(clip)
+
                 # Re-render de ESTE clip (útil tras ajustar encuadre/formato).
                 if st.button("🔄 Re-renderizar este clip", key=f"rerender_{clip['index']}"):
                     with st.status(f"Re-renderizando clip {clip['index']}…", expanded=True) as _s:

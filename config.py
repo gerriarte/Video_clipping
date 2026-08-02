@@ -75,6 +75,12 @@ OUTPUT_HEIGHT      = 1920   # 9:16
 OUTPUT_FPS         = 30
 OUTPUT_CRF         = 18     # calidad del render Remotion (menor = mejor; 18 ≈ visualmente sin pérdida)
 
+# Cuántos clips se renderizan a la vez. Cada render levanta su propio Chromium,
+# así que esto multiplica la RAM: 2 es un buen default y con 8+ núcleos rinde.
+# Bajalo a 1 si la máquina se queda sin memoria; subilo si te sobra.
+_default_render_workers = 2 if (os.cpu_count() or 1) >= 8 else 1
+RENDER_CONCURRENCY = max(1, int(os.environ.get("RENDER_CONCURRENCY", _default_render_workers)))
+
 # ── Formatos por clip ─────────────────────────────────────────────────────────
 # Cada clip elige su formato en la UI. Campos:
 #   width/height : dimensiones del render.

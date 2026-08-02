@@ -6,14 +6,22 @@ resuelve automáticamente con el detector de caras.
 
 import json
 import math
+import os
 import platform
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import config
-from modules.layout_detector import detect_layout, detect_split
+from modules.layout_detector import (
+    detect_layout,
+    detect_split,
+    _face_x_to_object_position,
+    _visible_frac,
+)
 from modules.media_server import MediaServer
+from modules.segment_preview import analyze_clip_file, shot_segments
 
 # En Windows, subprocess no puede ejecutar npx.ps1; usa npx.cmd
 _NPX = "npx.cmd" if platform.system() == "Windows" else "npx"
@@ -112,6 +120,60 @@ def _resolve_encuadre(clip_path: Path, clip_duration: float, fmt_key: str,
     return base
 
 
+def _source_aspect(frame_path) -> float:
+    """Aspecto (ancho/alto) de la fuente, leído de una muestra del análisis."""
+    try:
+        import cv2
+        img = cv2.imread(str(frame_path))
+        if img is not None:
+            h, w = img.shape[:2]
+            if h:
+                return w / h
+    except Exception:
+        pass
+    return 16.0 / 9.0
+
+
+def follow_shot_segments(clip_path, clip_duration: float, width: int, height: int,
+                         fps: int) -> list | None:
+    """
+    Tramos de layout para "seguir la toma": split mientras están los dos,
+    recorte cerrado cuando la cámara va a uno solo.
+
+    Se analiza el ARCHIVO DE CLIP (no el tramo del original) porque después del
+    ajuste de bordes y de los jump cuts los tiempos ya no coinciden.
+
+    Devuelve None si el clip no cambia de plano: ahí un layout fijo es mejor
+    (menos trabajo y sin riesgo de parpadeo).
+    """
+    analysis = analyze_clip_file(clip_path, clip_duration)
+    segs = shot_segments(analysis.get("timeline") or [], clip_duration)
+    if len(segs) < 2:
+        return None
+
+    frames = analysis.get("frames") or []
+    src_aspect = _source_aspect(frames[0]) if frames else 16.0 / 9.0
+    full_r = _visible_frac(width / height, src_aspect)
+    half_r = _visible_frac(width / (height / 2), src_aspect)
+
+    out = []
+    for s in segs:
+        item = {"fromFrame": max(0, int(round(s["start"] * fps)))}
+        if s["kind"] == "two":
+            xs = s["xs"]
+            item["layout"] = "split"
+            item["focusTop"]    = round(_face_x_to_object_position(xs[0], half_r), 3)
+            item["focusBottom"] = round(_face_x_to_object_position(xs[-1], half_r), 3)
+        else:
+            item["layout"] = "fill"
+            item["focusX"] = round(_face_x_to_object_position(s["xs"][0], full_r), 3)
+        out.append(item)
+
+    # El primero tiene que arrancar en 0 sí o sí (el componente busca hacia atrás).
+    out[0]["fromFrame"] = 0
+    return out
+
+
 def render_clip(
     clip_path: Path,
     output_path: Path,
@@ -126,10 +188,15 @@ def render_clip(
     focus_top: float = 0.5,
     focus_bottom: float = 0.5,
     manual_crops: list | None = None,
+    layout_segments: list | None = None,
+    concurrency: int | None = None,
 ) -> Path:
     """
     Llama a Remotion para renderizar el clip en las dimensiones dadas.
 
+    concurrency: hilos que usa ESTE render. Cuando corren varios renders en
+                 paralelo hay que repartir los núcleos, si no cada uno cree que
+                 tiene la máquina entera y se pelean.
     width/height: dimensiones de salida del formato elegido.
     clip_url: URL HTTP del clip (si se sirve via _ClipServer).
               Si None, usa clip_path como string (puede fallar en Chromium).
@@ -157,6 +224,8 @@ def render_clip(
     }
     if manual_crops:
         props["manualCrops"] = manual_crops
+    if layout_segments:
+        props["layoutSegments"] = layout_segments
     if duration_frames is not None:
         props["durationInFrames"] = duration_frames
 
@@ -176,6 +245,8 @@ def render_clip(
             "--fps",    str(config.OUTPUT_FPS),
             "--crf",    str(config.OUTPUT_CRF),
         ]
+        if concurrency:
+            cmd.append(f"--concurrency={concurrency}")
 
         result = subprocess.run(
             cmd,
@@ -206,6 +277,7 @@ def render_cover(
     focus_top: float = 0.5,
     focus_bottom: float = 0.5,
     manual_crops: list | None = None,
+    layout_segments: list | None = None,
 ) -> Path:
     """
     Genera la portada (JPG) renderizando UN frame del clip con la misma composición
@@ -231,6 +303,8 @@ def render_cover(
     }
     if manual_crops:
         props["manualCrops"] = manual_crops
+    if layout_segments:
+        props["layoutSegments"] = layout_segments
 
     props_file = Path(tempfile.mktemp(suffix=".json"))
     props_file.write_text(json.dumps(props, ensure_ascii=False), encoding="utf-8")
@@ -265,102 +339,155 @@ def render_cover(
     return output_path
 
 
+def _render_one(clip: dict, output_dir: Path, clip_url: str,
+                concurrency: int | None) -> dict:
+    """Renderiza un clip + su portada. Pensado para correr en un worker del pool."""
+    idx   = clip["index"]
+    title = clip.get("title", f"Clip {idx}")
+    name  = _clip_filename(title, idx)
+    output_path = output_dir / f"{name} - vertical.mp4"
+
+    # Duración real del archivo de clip (incluye los pads de corte y, si hubo
+    # jump cuts, ya viene medida del archivo). Fallback para clips viejos.
+    clip_duration = clip.get("clip_duration")
+    if not clip_duration:
+        clip_duration = clip["end"] - clip["start"]
+    duration_frames = math.ceil(clip_duration * config.OUTPUT_FPS)
+
+    # Formato elegido por clip → dimensiones + cómo encuadrar.
+    fmt_key = _format_key(clip.get("formato"))
+    preset  = config.FORMAT_PRESETS[fmt_key]
+    width, height = preset["width"], preset["height"]
+
+    enc = _resolve_encuadre(clip["clip_path"], clip_duration, fmt_key, preset, clip)
+    layout       = enc["layout"]
+    focus        = enc["focus_x"]
+    keyframes    = enc["focus_keyframes"]
+    focus_top    = enc["focus_top"]
+    focus_bottom = enc["focus_bottom"]
+    manual_crops = enc["manual_crops"]
+    cover_time   = enc["cover_time"]
+
+    # ── Seguir la toma: layout que cambia dentro del clip ──────────────────────
+    # El encuadre manual es una decisión explícita del usuario: si lo puso, manda.
+    layout_segments = None
+    # En 16:9 no hay nada que seguir: la fuente ya tiene el aspecto de salida.
+    if clip.get("follow_shot") and not manual_crops and fmt_key != "16:9":
+        try:
+            layout_segments = follow_shot_segments(
+                clip["clip_path"], clip_duration, width, height, config.OUTPUT_FPS
+            )
+        except Exception as e:
+            _log(f"     ⚠️  No se pudo seguir la toma ({e}); layout fijo.")
+        if layout_segments:
+            kinds = "→".join(
+                "⧉" if s["layout"] == "split" else "📱" for s in layout_segments
+            )
+            enc["badge"] = f"🔀 sigue la toma ({len(layout_segments)} tramos: {kinds})"
+
+    _log(f"  🎬 {title} — {preset['label']} · {enc['badge']}")
+
+    render_clip(
+        clip_path=clip["clip_path"],
+        output_path=output_path,
+        width=width,
+        height=height,
+        clip_title=title,
+        clip_url=clip_url,
+        duration_frames=duration_frames,
+        layout=layout,
+        focus_x=focus,
+        focus_keyframes=keyframes,
+        focus_top=focus_top,
+        focus_bottom=focus_bottom,
+        manual_crops=manual_crops,
+        layout_segments=layout_segments,
+        concurrency=concurrency,
+    )
+
+    # Portada: mejor frame con cara (o punto medio), mismo recorte, sin texto.
+    cover_path  = output_dir / f"{name} - portada.jpg"
+    cover_frame = int(round(cover_time * config.OUTPUT_FPS))
+    cover_frame = max(0, min(cover_frame, max(0, duration_frames - 1)))
+    try:
+        render_cover(
+            clip_path=clip["clip_path"],
+            output_path=cover_path,
+            width=width,
+            height=height,
+            clip_url=clip_url,
+            cover_frame=cover_frame,
+            layout=layout,
+            focus_x=focus,
+            focus_keyframes=keyframes,
+            focus_top=focus_top,
+            focus_bottom=focus_bottom,
+            manual_crops=manual_crops,
+            layout_segments=layout_segments,
+        )
+    except Exception as e:
+        _log(f"     ⚠️  No se pudo generar la portada: {e}")
+        cover_path = None
+
+    return {
+        **clip,
+        "output_path": output_path,
+        "formato":     fmt_key,
+        "layout":      layout,
+        "cover_path":  cover_path,
+    }
+
+
 def render_clips(
     clips_with_subs: list[dict],
     output_dir: Path,
     video_id: str,
     progress_fn: "Callable[[int, int, str], None] | None" = None,
+    workers: int | None = None,
 ) -> list[dict]:
     """
     Renderiza todos los clips y retorna la lista con output_path añadido.
-    progress_fn(done, total, titulo) se llama antes de cada clip y al finalizar.
+
+    Corre `workers` renders en paralelo (default `config.RENDER_CONCURRENCY`).
+    progress_fn(done, total, titulo) se llama SIEMPRE desde este hilo — no desde
+    los workers — porque quien lo pasa suele estar pintando en Streamlit.
     """
     server = MediaServer(config.CLIPS_DIR)  # puerto efímero + Range
     server.start()
 
     total   = len(clips_with_subs)
+    workers = max(1, min(workers or config.RENDER_CONCURRENCY, total or 1))
+    # Repartir los núcleos entre los renders simultáneos: si cada uno usa la
+    # máquina entera se pelean y no se gana nada.
+    per_render = max(1, (os.cpu_count() or 2) // (2 * workers)) if workers > 1 else None
+
     results = []
     try:
-        for done, clip in enumerate(clips_with_subs):
-            idx   = clip["index"]
-            title = clip.get("title", f"Clip {idx}")
-            name  = _clip_filename(title, idx)
-            output_path = output_dir / f"{name} - vertical.mp4"
-
+        if workers == 1:
+            for done, clip in enumerate(clips_with_subs):
+                if progress_fn:
+                    progress_fn(done, total, clip.get("title", ""))
+                results.append(_render_one(clip, output_dir, server.url_for(clip["clip_path"]), None))
+        else:
+            _log(f"  ⚡ Renderizando {total} clips de a {workers} en paralelo "
+                 f"({per_render} hilos cada uno)")
             if progress_fn:
-                progress_fn(done, total, title)
-
-            clip_url = server.url_for(clip["clip_path"])
-
-            # Duración real del archivo de clip (incluye los pads de corte).
-            # Fallback para clips cortados antes de exponer clip_duration.
-            clip_duration = clip.get("clip_duration")
-            if not clip_duration:
-                clip_duration = clip["end"] - clip["start"]
-            duration_frames = math.ceil(clip_duration * config.OUTPUT_FPS)
-
-            # Formato elegido por clip → dimensiones + cómo encuadrar.
-            fmt_key = _format_key(clip.get("formato"))
-            preset  = config.FORMAT_PRESETS[fmt_key]
-            width, height = preset["width"], preset["height"]
-
-            enc = _resolve_encuadre(clip["clip_path"], clip_duration, fmt_key, preset, clip)
-            layout       = enc["layout"]
-            focus        = enc["focus_x"]
-            keyframes    = enc["focus_keyframes"]
-            focus_top    = enc["focus_top"]
-            focus_bottom = enc["focus_bottom"]
-            manual_crops = enc["manual_crops"]
-            cover_time   = enc["cover_time"]
-
-            _log(f"  🎬 [{done+1}/{total}] {title} — {preset['label']} · {enc['badge']}")
-
-            render_clip(
-                clip_path=clip["clip_path"],
-                output_path=output_path,
-                width=width,
-                height=height,
-                clip_title=title,
-                clip_url=clip_url,
-                duration_frames=duration_frames,
-                layout=layout,
-                focus_x=focus,
-                focus_keyframes=keyframes,
-                focus_top=focus_top,
-                focus_bottom=focus_bottom,
-                manual_crops=manual_crops,
-            )
-
-            # Portada: mejor frame con cara (o punto medio), mismo recorte, sin texto.
-            cover_path  = output_dir / f"{name} - portada.jpg"
-            cover_frame = int(round(cover_time * config.OUTPUT_FPS))
-            cover_frame = max(0, min(cover_frame, max(0, duration_frames - 1)))
-            try:
-                render_cover(
-                    clip_path=clip["clip_path"],
-                    output_path=cover_path,
-                    width=width,
-                    height=height,
-                    clip_url=clip_url,
-                    cover_frame=cover_frame,
-                    layout=layout,
-                    focus_x=focus,
-                    focus_keyframes=keyframes,
-                    focus_top=focus_top,
-                    focus_bottom=focus_bottom,
-                    manual_crops=manual_crops,
-                )
-            except Exception as e:
-                _log(f"     ⚠️  No se pudo generar la portada: {e}")
-                cover_path = None
-
-            results.append({
-                **clip,
-                "output_path": output_path,
-                "formato":     fmt_key,
-                "layout":      layout,
-                "cover_path":  cover_path,
-            })
+                progress_fn(0, total, clips_with_subs[0].get("title", ""))
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {
+                    pool.submit(
+                        _render_one, clip, output_dir,
+                        server.url_for(clip["clip_path"]), per_render,
+                    ): clip
+                    for clip in clips_with_subs
+                }
+                for done, future in enumerate(as_completed(futures)):
+                    # Un fallo se propaga acá (el `with` espera a los que ya arrancaron).
+                    results.append(future.result())
+                    if progress_fn:
+                        progress_fn(done + 1, total, futures[future].get("title", ""))
+            # Los renders terminan en cualquier orden; el usuario espera el suyo.
+            results.sort(key=lambda c: c.get("index", 0))
 
         if progress_fn:
             progress_fn(total, total, "")

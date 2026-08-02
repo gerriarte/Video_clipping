@@ -66,6 +66,185 @@ decisión automática anterior.
 (`detect_split` + fracción por aspecto) → `renderer` → `app.py` → prueba
 end-to-end con un clip por formato (idealmente uno con los dos hosts para el split).
 
+### Preview del tramo antes de elegir el formato   ✅ IMPLEMENTADO (2026-08-02)
+
+El formato se elegía a ciegas: en el Paso 3 el clip todavía no está cortado, así
+que no había nada que mirar para saber si el tramo tiene **una** persona (→ 9:16)
+o **dos** (→ split). Ahora el Paso 3 trae el panel *"👁 Ver el video y elegir
+formato"*:
+
+- **Tres fotos por tramo** (inicio / medio / final) sacadas del video original con
+  seek rápido de ffmpeg (`-ss` antes de `-i`, sin recodificar) y cacheadas en
+  `clips/_previews/`. ~0,6 s por tramo la primera vez, instantáneo después.
+- **Reproductor del tramo** (toggle "▶ Ver el tramo en video"), servido por el
+  mismo `media_server` con Range del editor de timeline: el navegador baja solo
+  los bytes de ese tramo aunque el episodio pese varios GB. Usa el proxy 480p si
+  ya existe; si no, el original.
+- **Conteo de personas + sugerencia ⭐** (`modules/segment_preview.py`): Haar
+  frontal + perfil (y perfil espejado, si no se pierde a quien mira al otro host).
+  Una cara solo cuenta si aparece en la mitad de los frames — así una detección
+  espuria no inventa una tercera persona y una cara perdida en un frame no
+  desaparece. `people_max` avisa cuando el plano cambia dentro del tramo
+  ("1–2 personas · mirá las fotos").
+- **Botones de formato por clip** (el activo resaltado) + "Aplicar los N formatos
+  sugeridos". Escriben en `st.session_state.clips` y refrescan la tabla vía
+  `clips_editor_rev`; `merge_df_into_clips` persiste lo editado en la tabla antes
+  del rerun para que no se pierdan títulos ni tiempos.
+
+Sugerencia: 2+ personas → `split`, 1 → `9:16`, 0 caras claras → `16:9` (no
+recorta nada). Es solo una sugerencia: la elección final siempre es del usuario.
+
+Tests: `tests/test_segment_preview.py` (conteo, ruido, cambio de plano, claves de
+caché).
+
+### Cortes guiados por el audio + jump cuts + render paralelo   ✅ IMPLEMENTADO (2026-08-02)
+
+Cuatro mejoras al proceso de edición, todas verificadas sobre material real
+("Influencer Inside – Juanchi", 2h14):
+
+**1. Bordes al audio** (`modules/audio_edit.py` + `clipper.plan_clip`). Los
+tiempos vienen del VTT rolling de YouTube (±1–2 s), y el pad fijo de 0,25 s no
+alcanzaba: había clips que arrancaban con media palabra. Ahora `silencedetect`
+marca las pausas reales y el borde se pega a la más cercana dentro de ±1,5 s.
+Dos detalles que importan:
+- Se analiza un tramo **más ancho** que el clip (`start - SNAP_WINDOW`,
+  `end + SNAP_WINDOW`). Mirando solo [start, end] el borde únicamente podía
+  moverse hacia adentro, que es justo la dirección que come voz.
+- Ante dos pausas igual de cerca gana la que **alarga** el clip (`_PREFER_FACTOR`):
+  sumar aire es barato, perder palabras no tiene arreglo.
+Cuando hubo snap se desactivan los pads fijos (el aire ya lo puso el snap).
+
+**2. Loudness a -14 LUFS** (`LOUDNORM_FILTER`). El episodio de prueba medía
+-21,2 LUFS integrados; la salida da -14,0 exactos. Sin esto cada episodio sale
+con un volumen distinto y el clip se escucha flojo al lado del feed.
+
+**3. Jump cuts** (opcional, checkbox en el Paso 3). `speech_segments` saca las
+pausas de más de 0,7 s dejando 0,15 s de aire a cada lado, y `build_concat_filter`
+arma un `filter_complex` con `trim`/`atrim` + `concat` en **un solo pase de
+ffmpeg** (no hay archivos intermedios). Cada trozo de audio lleva un fundido de
+20 ms: sin eso los empalmes hacen click. En los clips de prueba sacó 4–5 s de 65.
+`clip_duration` ahora se mide con ffprobe del archivo real, porque con jump cuts
+ya no es `end - start`.
+
+**4. Render en paralelo** (`renderer.render_clips`, `config.RENDER_CONCURRENCY`,
+default 2). Pool de hilos (cada uno lanza su propio proceso de Remotion) con dos
+cuidados: `progress_fn` se llama **siempre desde el hilo principal** (quien lo
+pasa está pintando en Streamlit) y los resultados se reordenan por `index`,
+porque los renders terminan en cualquier orden. Además se reparten los núcleos
+(`--concurrency` por render) para que dos renders no crean cada uno que tienen la
+máquina entera. `media_server` ahora se traga los `ConnectionResetError` que
+Chromium genera al abrir y cerrar sockets: con varios renders llenaban la consola.
+
+**5. Encuadre previsualizado en 3 momentos** (`_clip_frames_bgr`). El encuadre
+manual se aprobaba mirando UN frame (la mitad del clip) y se pagaba el error
+después de un render entero. Ahora el mismo recorte se muestra en arranque /
+medio / final — en la prueba quedó a la vista que un split elegido en el medio
+dejaba al peluche en la mitad de arriba al principio y al final.
+
+Tests: `tests/test_audio_edit.py` (parseo de silencedetect, snap, jump cuts,
+armado del filtro).
+
+**Pendiente / próximo:** los jump cuts son binarios por lote; estaría bueno
+poder activarlos por clip y ver el "antes/después" antes de cortar.
+
+### Análisis real de la toma (reemplaza el conteo de 3 frames)   ✅ (2026-08-02)
+
+La primera versión sacaba 3 fotos por tramo y contaba caras exigiendo que
+aparecieran en la mitad de los frames. Resultado sobre 30 clips reales: 19
+sugerencias de 9:16 — pero **17 de esas 19 tenían 2 caras en algún frame**. Con 3
+muestras en 70 s de un episodio que alterna plano general y primer plano, la
+regla de mayoría es casi una moneda. No era un análisis, era una foto.
+
+**Ahora** (`segment_preview`): una sola pasada de ffmpeg saca ~24 muestras (una
+cada ~3 s) y se mide **cuánto tiempo** hay dos personas en cuadro:
+`two_shot_ratio` ≥ 45% → split; casi sin caras → 16:9; el resto → 9:16. Entre 20%
+y 45% se marca **MIXTO** ("cambia de plano"), que es justo el caso donde ningún
+formato único sirve. La UI muestra el porcentaje y las muestras: la sugerencia es
+auditable, no un veredicto.
+
+Sobre los 30 clips reales pasó de 11 a 18 splits, y los extremos se verificaron a
+ojo: 100% de dos personas = los dos hombres en el sillón; 8% = primer plano de
+uno solo. Costo: ~1,3 s por tramo la primera vez (0,9 s extraer + 0,4 s detectar);
+las caras se cachean en `faces.json` junto a los frames → 0,2 s para los 30 en
+sesiones siguientes.
+
+**Detector:** se probó MediaPipe FaceLandmarker (el que usa `layout_detector`
+sobre el clip cortado) y devuelve **0 caras donde a ojo hay dos**: su detector es
+de corto alcance y acá la gente está lejos y de perfil. Haar frontal + perfil a
+480 px es el que acierta (a 720 px empieza a ver caras en los peluches).
+
+**Limitación conocida:** Haar cuenta como caras los dibujos del mural y los
+peluches del set — en un frame verificado marcó 4 donde hay 2. No afecta la
+decisión (lo que importa es "2+ vs 1"), pero por eso las etiquetas dicen
+**"2+ personas"** y nunca un número exacto mayor que 2. Filtrar por tamaño no
+sirve (los dibujos miden lo mismo que las caras); lo que podría servir es la
+estabilidad temporal (un dibujo no se mueve nunca), pendiente de evaluar.
+
+### Seguir la toma: layout que cambia dentro del clip   ✅ (2026-08-02)
+
+**Qué NO se puede:** cambiar la relación de aspecto a mitad del archivo. Un mp4
+tiene dimensiones fijas. **Lo que sí:** cambiar el recorte dentro del mismo
+lienzo — split mientras están los dos en cuadro, recorte cerrado al hablante
+cuando la cámara va a uno solo. Es lo que necesitan los clips marcados como
+"cambia de plano" (9 de 30 en el episodio de prueba).
+
+- `segment_preview.shot_segments` convierte la línea de tiempo de muestras en
+  tramos de layout. Cada muestra manda sobre la franja que la rodea; las muestras
+  sin caras **heredan** el tramo anterior (un frame perdido no es un corte) y los
+  tramos de menos de 3 s se funden con el vecino más largo, si no el recorte
+  parpadea.
+- `renderer.follow_shot_segments` los pasa a frames y calcula el `objectPosition`
+  de cada tramo (aspecto completo para "fill", medio para "split"). Analiza el
+  **archivo de clip ya cortado**, no el tramo del original: después del ajuste de
+  bordes y los jump cuts los tiempos del original ya no mapean. Si el clip no
+  cambia de plano devuelve None y se usa un layout fijo.
+- `ClipComposition.tsx`: nuevo prop `layoutSegments` + `segmentAt(frame)`. Los
+  branches de layout se extrajeron a un componente `ClipVisual` reutilizado por
+  los dos caminos, así el modo normal quedó igual que antes.
+- **El audio es el punto delicado:** al cambiar de layout los `OffthreadVideo` se
+  desmontan y remontan, y si el sonido colgara de ellos se cortaría en cada
+  cambio. En este modo los videos van todos muteados y el audio sale de un
+  `<Audio src={clipPath}>` que abarca el clip entero.
+- El encuadre manual sigue teniendo prioridad: si el usuario lo fijó, manda.
+
+En la UI es un checkbox por clip ("🔀 Seguir la toma") en el panel del Paso 3.
+
+### UX de "Ajustar encuadre"   ✅ (2026-08-02)
+
+Reporte del usuario: *"al realizar cambios en los slides se cierra a veces y no se
+ve bien los cambios"*. Tres causas, tres arreglos:
+
+1. **Se cerraba solo.** El título del expander incluía un contador
+   (`"…(1 manual)"`). Al activar el encuadre manual el título CAMBIA, Streamlit lo
+   trata como un elemento nuevo y lo monta colapsado — justo mientras ajustabas.
+   Ahora la sección es un `st.toggle` con key (su estado sobrevive los reruns) y
+   el título es fijo. **Regla general para esta app: no meter valores variables en
+   el label de un expander.**
+2. **Se veía mal y andaba lento.** Se dibujaban los 15 clips a la vez, así que
+   cada movimiento de slider recalculaba todos los recortes y cada preview
+   quedaba diminuto. Ahora se ajusta **un clip por vez** (selectbox) y hay un
+   "🔍 Ver el preview grande" que muestra un solo momento a todo el ancho.
+3. **No se podía cambiar el formato después de cortar.** Se agregó el selector de
+   formato en el Paso 4 y también en el Paso 5 (junto a "Re-renderizar este
+   clip"). El corte es el mismo para todos los formatos — el formato solo afecta
+   al render — así que corregir una elección mala **no requiere volver a cortar**.
+
+`format_picker` pasó a recibir el dict del clip (antes escribía en
+`st.session_state.clips[pos]`, lo que lo ataba al Paso 3).
+
+**Extra:** `_STATE_FILE` ahora respeta la variable de entorno `ZUMO_STATE_FILE`,
+para poder levantar una instancia de prueba sin pisar el estado de la que estás
+usando.
+
+**4. La página se rehacía entera con cada slider** (y el scroll saltaba). Streamlit
+re-ejecuta todo el script ante cualquier widget. La solución es `@st.fragment`:
+`framing_panel` (Paso 4) y `clip_framing_fragment` (Paso 5) se re-ejecutan
+**solos**, sin volver a dibujar los videos de arriba. Medido en el navegador:
+`scrollTop` = 1082 antes y después de mover el zoom, con el preview actualizado.
+El cambio de **formato** sí hace rerun completo a propósito (cambia badges y el
+resumen de render que viven fuera del fragment); para eso `_rerun_here()` usa
+`scope="fragment"` cuando corresponde (p. ej. el botón de intercambiar mitades).
+
 ---
 
 ## Track 2 — Editor visual de timeline (Claude-opcional)   ✅ IMPLEMENTADO (2026-07-17)

@@ -1,6 +1,7 @@
 import React from "react";
 import {
   AbsoluteFill,
+  Audio,
   OffthreadVideo,
   useCurrentFrame,
   interpolate,
@@ -37,6 +38,19 @@ export interface ClipCompositionProps {
    *  1 rect → recorte único a toda la pantalla; 2 rects → split (arriba/abajo).
    *  Cuando está presente tiene prioridad sobre layout/focus (permite zoom). */
   manualCrops?:     CropRect[];
+  /** Recorte que SIGUE LA TOMA: el layout cambia dentro del clip (split mientras
+   *  están los dos, recorte cerrado cuando la cámara va a uno). Las dimensiones
+   *  no cambian nunca — lo que cambia es cómo se recorta el mismo lienzo.
+   *  Ordenados por `fromFrame`; el primero tiene que arrancar en 0. */
+  layoutSegments?:  LayoutSegment[];
+}
+
+export interface LayoutSegment {
+  fromFrame:    number;
+  layout:       "fill" | "fit" | "split";
+  focusX?:      number;
+  focusTop?:    number;
+  focusBottom?: number;
 }
 
 export interface CropRect {
@@ -86,6 +100,129 @@ const focusAt = (t: number, keyframes: FocusKeyframe[], fallback: number): numbe
   );
 };
 
+/** Tramo de layout vigente en el frame `frame`. */
+export const segmentAt = (
+  segments: LayoutSegment[],
+  frame: number
+): LayoutSegment => {
+  let current = segments[0];
+  for (const s of segments) {
+    if (s.fromFrame <= frame) current = s;
+    else break;
+  }
+  return current;
+};
+
+/** Los píxeles: un layout sobre el lienzo. `muted` cuando el audio lo pone
+ *  aparte un <Audio> (modo "seguir la toma": el video se remonta en cada cambio
+ *  de layout y el sonido no puede depender de eso). */
+const ClipVisual: React.FC<{
+  src:          string;
+  layout:       "fill" | "fit" | "split";
+  posX:         number;
+  focusTop:     number;
+  focusBottom:  number;
+  muted?:       boolean;
+}> = ({ src, layout, posX, focusTop, focusBottom, muted }) => (
+  <AbsoluteFill style={{ background: "#000" }}>
+    {layout === "fill" ? (
+      /* TALKING HEAD: recorte que llena toda la pantalla.
+         objectFit cover + objectPosition centra el recorte en quien habla;
+         posX se mueve suave entre hablantes según los keyframes. */
+      <AbsoluteFill>
+        <OffthreadVideo
+          src={src}
+          muted={muted}
+          style={{
+            width:          "100%",
+            height:         "100%",
+            objectFit:      "cover",
+            objectPosition: `${(posX * 100).toFixed(2)}% 50%`,
+          }}
+        />
+      </AbsoluteFill>
+    ) : layout === "split" ? (
+      /* DOS HOSTS: dos recortes del mismo video apilados. La mitad superior
+         se centra en focusTop y la inferior en focusBottom. El audio del clip
+         es idéntico en ambos videos: muteamos el de abajo para no duplicarlo. */
+      <AbsoluteFill>
+        <div style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "50%", overflow: "hidden" }}>
+          <OffthreadVideo
+            src={src}
+            muted={muted}
+            style={{
+              width:          "100%",
+              height:         "100%",
+              objectFit:      "cover",
+              objectPosition: `${(focusTop * 100).toFixed(2)}% 50%`,
+            }}
+          />
+        </div>
+        <div style={{ position: "absolute", top: "50%", left: 0, width: "100%", height: "50%", overflow: "hidden" }}>
+          <OffthreadVideo
+            src={src}
+            muted
+            style={{
+              width:          "100%",
+              height:         "100%",
+              objectFit:      "cover",
+              objectPosition: `${(focusBottom * 100).toFixed(2)}% 50%`,
+            }}
+          />
+        </div>
+        {/* Costura sutil entre las dos mitades. */}
+        <div
+          style={{
+            position:  "absolute",
+            top:       "50%",
+            left:      0,
+            width:     "100%",
+            height:    2,
+            transform: "translateY(-1px)",
+            background: "rgba(0,0,0,0.65)",
+          }}
+        />
+      </AbsoluteFill>
+    ) : (
+      /* PANTALLA COMPARTIDA: plano completo 16:9 a todo el ancho (máximo
+         detalle sin perder contenido) sobre fondo borroso que llena la pantalla. */
+      <>
+        <AbsoluteFill>
+          <OffthreadVideo
+            src={src}
+            muted
+            style={{
+              width:     "100%",
+              height:    "100%",
+              objectFit: "cover",
+              filter:    "blur(18px) brightness(0.35) saturate(1.3)",
+              transform: "scale(1.08)",
+            }}
+          />
+        </AbsoluteFill>
+
+        <AbsoluteFill
+          style={{
+            display:        "flex",
+            alignItems:     "center",
+            justifyContent: "center",
+          }}
+        >
+          <OffthreadVideo
+            src={src}
+            muted={muted}
+            style={{
+              width:       "100%",
+              aspectRatio: "16 / 9",
+              objectFit:   "contain",
+            }}
+          />
+        </AbsoluteFill>
+      </>
+    )}
+  </AbsoluteFill>
+);
+
 export const ClipComposition: React.FC<ClipCompositionProps> = ({
   clipPath,
   fps,
@@ -95,6 +232,7 @@ export const ClipComposition: React.FC<ClipCompositionProps> = ({
   focusTop = 0.5,
   focusBottom = 0.5,
   manualCrops,
+  layoutSegments,
 }) => {
   // Posición horizontal del recorte en este frame (cámara que sigue al hablante).
   const frame = useCurrentFrame();
@@ -150,104 +288,36 @@ export const ClipComposition: React.FC<ClipCompositionProps> = ({
     );
   }
 
+  // ── Seguir la toma: el layout cambia dentro del clip ───────────────────────
+  // El audio va aparte, en un <Audio> que abarca todo el clip: los elementos de
+  // video se desmontan y remontan en cada cambio de layout, y si el sonido
+  // colgara de ellos se cortaría en cada corte.
+  if (layoutSegments && layoutSegments.length > 0) {
+    const seg = segmentAt(layoutSegments, frame);
+    return (
+      <>
+        <ClipVisual
+          src={clipPath}
+          layout={seg.layout}
+          posX={seg.focusX ?? focusX}
+          focusTop={seg.focusTop ?? focusTop}
+          focusBottom={seg.focusBottom ?? focusBottom}
+          muted
+        />
+        <Audio src={clipPath} />
+      </>
+    );
+  }
+
   // Sin fade in/out a negro: así el primer frame ya muestra contenido y el
   // thumbnail en el grid de redes no queda en pantalla negra.
   return (
-    <AbsoluteFill style={{ background: "#000" }}>
-
-      {layout === "fill" ? (
-        /* TALKING HEAD: recorte que llena toda la pantalla.
-           objectFit cover + objectPosition centra el recorte en quien habla;
-           posX se mueve suave entre hablantes según los keyframes. */
-        <AbsoluteFill>
-          <OffthreadVideo
-            src={clipPath}
-            style={{
-              width:          "100%",
-              height:         "100%",
-              objectFit:      "cover",
-              objectPosition: `${(posX * 100).toFixed(2)}% 50%`,
-            }}
-          />
-        </AbsoluteFill>
-      ) : layout === "split" ? (
-        /* DOS HOSTS: dos recortes del mismo video apilados. La mitad superior
-           se centra en focusTop y la inferior en focusBottom. El audio del clip
-           es idéntico en ambos videos: muteamos el de abajo para no duplicarlo. */
-        <AbsoluteFill>
-          <div style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "50%", overflow: "hidden" }}>
-            <OffthreadVideo
-              src={clipPath}
-              style={{
-                width:          "100%",
-                height:         "100%",
-                objectFit:      "cover",
-                objectPosition: `${(focusTop * 100).toFixed(2)}% 50%`,
-              }}
-            />
-          </div>
-          <div style={{ position: "absolute", top: "50%", left: 0, width: "100%", height: "50%", overflow: "hidden" }}>
-            <OffthreadVideo
-              src={clipPath}
-              muted
-              style={{
-                width:          "100%",
-                height:         "100%",
-                objectFit:      "cover",
-                objectPosition: `${(focusBottom * 100).toFixed(2)}% 50%`,
-              }}
-            />
-          </div>
-          {/* Costura sutil entre las dos mitades. */}
-          <div
-            style={{
-              position:  "absolute",
-              top:       "50%",
-              left:      0,
-              width:     "100%",
-              height:    2,
-              transform: "translateY(-1px)",
-              background: "rgba(0,0,0,0.65)",
-            }}
-          />
-        </AbsoluteFill>
-      ) : (
-        /* PANTALLA COMPARTIDA: plano completo 16:9 a todo el ancho (máximo
-           detalle sin perder contenido) sobre fondo borroso que llena la pantalla. */
-        <>
-          <AbsoluteFill>
-            <OffthreadVideo
-              src={clipPath}
-              muted
-              style={{
-                width:     "100%",
-                height:    "100%",
-                objectFit: "cover",
-                filter:    "blur(18px) brightness(0.35) saturate(1.3)",
-                transform: "scale(1.08)",
-              }}
-            />
-          </AbsoluteFill>
-
-          <AbsoluteFill
-            style={{
-              display:        "flex",
-              alignItems:     "center",
-              justifyContent: "center",
-            }}
-          >
-            <OffthreadVideo
-              src={clipPath}
-              style={{
-                width:       "100%",
-                aspectRatio: "16 / 9",
-                objectFit:   "contain",
-              }}
-            />
-          </AbsoluteFill>
-        </>
-      )}
-
-    </AbsoluteFill>
+    <ClipVisual
+      src={clipPath}
+      layout={layout}
+      posX={posX}
+      focusTop={focusTop}
+      focusBottom={focusBottom}
+    />
   );
 };
