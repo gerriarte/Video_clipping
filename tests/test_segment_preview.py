@@ -92,7 +92,9 @@ def test_sugiere_vertical_cuando_predomina_una_persona():
 
 
 def test_sugiere_no_recortar_si_casi_no_hay_caras():
-    assert suggest_format(summarize_shots(frames("0000000011"))) == "16:9"
+    # Vertical para redes, pero con el plano entero: recortar sin caras que
+    # seguir se come lo que sea que esté mostrando la pantalla.
+    assert suggest_format(summarize_shots(frames("0000000011"))) == "9:16-full"
 
 
 def test_marca_mixto_cuando_la_toma_cambia():

@@ -97,17 +97,29 @@ def _resolve_encuadre(clip_path: Path, clip_duration: float, fmt_key: str,
                 return base
         # 16:9 fijo (o faltan rects): cae a la autodetección de abajo.
 
+    if preset.get("base") == "letterbox":
+        # Plano completo sobre negro: no hay recorte, así que tampoco hace falta
+        # buscar caras (nos ahorramos la detección entera).
+        base.update(layout="letterbox", badge="⬛ plano completo sobre negro")
+        return base
+
     if preset.get("auto_layout"):
         det = detect_layout(clip_path, clip_duration, target_aspect=width / height)
         kf  = det.get("focus_keyframes", [])
-        if det["layout"] == "fill" and len(kf) > 1:
+        layout = det["layout"]
+        # `allow_fit: False` → el recorte llena la pantalla sí o sí. La caída a
+        # "fit" (fondo borroso) existía para no recortar mal cuando no hay una
+        # cara grande; ahora eso se elige a mano con el formato "9:16 completo".
+        if layout == "fit" and preset.get("allow_fit") is False:
+            layout = "fill"
+        if layout == "fill" and len(kf) > 1:
             badge = f"🎯 sigue al hablante ({len(kf)} kf)"
-        elif det["layout"] == "fill":
+        elif layout == "fill":
             badge = "📐 recorte al hablante"
         else:
             badge = "🖥 plano completo (fondo borroso)"
         base.update(
-            layout=det["layout"], focus_x=det["focus_x"],
+            layout=layout, focus_x=det["focus_x"],
             focus_keyframes=kf, cover_time=det.get("cover_time", base["cover_time"]),
             badge=badge,
         )
@@ -380,8 +392,9 @@ def _render_one(clip: dict, output_dir: Path, clip_url: str,
     # ── Seguir la toma: layout que cambia dentro del clip ──────────────────────
     # El encuadre manual es una decisión explícita del usuario: si lo puso, manda.
     layout_segments = None
-    # En 16:9 no hay nada que seguir: la fuente ya tiene el aspecto de salida.
-    if clip.get("follow_shot") and not manual_crops and fmt_key != "16:9":
+    # Solo tiene sentido en formatos que recortan: 16:9 y "9:16 completo"
+    # muestran el plano entero, no hay toma que seguir.
+    if clip.get("follow_shot") and not manual_crops and config.crops(fmt_key):
         try:
             layout_segments = follow_shot_segments(
                 clip["clip_path"], clip_duration, width, height, config.OUTPUT_FPS

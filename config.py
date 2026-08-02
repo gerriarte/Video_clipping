@@ -84,17 +84,31 @@ RENDER_CONCURRENCY = max(1, int(os.environ.get("RENDER_CONCURRENCY", _default_re
 # ── Formatos por clip ─────────────────────────────────────────────────────────
 # Cada clip elige su formato en la UI. Campos:
 #   width/height : dimensiones del render.
-#   base         : layout de Remotion cuando NO se autodetecta ("fill" o "split").
-#   auto_layout  : si True, detect_layout decide entre "fill" (recorte al hablante)
-#                  y "fit" (plano completo sobre fondo borroso). Si False, se usa
-#                  `base` fijo.
+#   base         : layout de Remotion cuando NO se autodetecta ("fill", "split"
+#                  o "letterbox" = plano entero centrado sobre negro).
+#   auto_layout  : si True, detect_layout busca al hablante para centrar el
+#                  recorte. Si False, se usa `base` fijo.
+#   allow_fit    : si False, el recorte SIEMPRE llena la pantalla aunque no se
+#                  detecte una cara grande (si no, detect_layout caería a "fit",
+#                  plano completo sobre fondo borroso). Para el 9:16 completo ya
+#                  está el preset propio con barras negras, así que "9:16" no
+#                  necesita ese fallback y se vuelve predecible.
+#   crop         : si el formato recorta algo (habilita el encuadre manual y el
+#                  modo "seguir la toma"). 16:9 y 9:16 completo muestran el plano
+#                  entero: no hay nada que encuadrar.
 FORMAT_PRESETS = {
-    "9:16":  {"label": "9:16 vertical",   "width": 1080, "height": 1920, "base": "fill",  "auto_layout": True},
-    "1:1":   {"label": "1:1 cuadrado",    "width": 1080, "height": 1080, "base": "fill",  "auto_layout": True},
-    "16:9":  {"label": "16:9 horizontal", "width": 1920, "height": 1080, "base": "fill",  "auto_layout": False},
-    "split": {"label": "9:16 dividido",   "width": 1080, "height": 1920, "base": "split", "auto_layout": False},
+    "9:16":      {"label": "9:16 vertical",        "width": 1080, "height": 1920, "base": "fill",      "auto_layout": True,  "allow_fit": False, "crop": True},
+    "9:16-full": {"label": "9:16 completo",        "width": 1080, "height": 1920, "base": "letterbox", "auto_layout": False, "crop": False},
+    "1:1":       {"label": "1:1 cuadrado",         "width": 1080, "height": 1080, "base": "fill",      "auto_layout": True,  "crop": True},
+    "16:9":      {"label": "16:9 horizontal",      "width": 1920, "height": 1080, "base": "fill",      "auto_layout": False, "crop": False},
+    "split":     {"label": "9:16 dividido",        "width": 1080, "height": 1920, "base": "split",     "auto_layout": False, "crop": True},
 }
 DEFAULT_FORMAT = "9:16"
+
+
+def crops(fmt_key: str) -> bool:
+    """Si el formato recorta (y por lo tanto se puede encuadrar a mano)."""
+    return bool(FORMAT_PRESETS.get(fmt_key, {}).get("crop"))
 
 # ── Marca Zumo ───────────────────────────────────────────────────────────────
 ZUMO_CONTEXT = """

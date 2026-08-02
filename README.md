@@ -164,7 +164,8 @@ Revisá la tabla de clips identificados. Podés:
 - Marcar/desmarcar cuáles cortar
 - Editar el título y los tiempos de inicio/fin
 - Elegir el formato por clip:
-  - **9:16 vertical** — recorte que sigue al hablante (o plano completo sobre fondo borroso si es pantalla compartida)
+  - **9:16 vertical** — recorte vertical a pantalla completa, centrado en quien habla
+  - **9:16 completo** — el 16:9 entero centrado sobre **negro** (barras arriba y abajo): lienzo vertical sin perder nada de la imagen, para pantallas compartidas, gráficos o planos abiertos
   - **1:1 cuadrado** — recorte cuadrado centrado en el hablante
   - **16:9 horizontal** — plano completo original
   - **9:16 dividido (split)** — dos recortes del mismo video apilados (un host arriba, otro abajo)
@@ -180,6 +181,7 @@ muestra la evidencia:
 
 - `👥 2 personas en el 88% del clip (24 muestras)` → sugiere **split**
 - `👤 1 persona en el 92% del clip` → sugiere **9:16**
+- `🖥 casi sin caras` → sugiere **9:16 completo** (vertical, pero sin recortar)
 - `🔀 cambia de plano — 2 personas en el 38% del clip` → la toma alterna; ningún
   formato único queda bien en todo el clip, conviene mirarlo
 

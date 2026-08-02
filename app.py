@@ -248,7 +248,13 @@ _LABEL_TO_KEY   = {v: k for k, v in _FORMAT_LABELS.items()}
 _FORMAT_OPTIONS = list(_FORMAT_LABELS.values())
 # Valores viejos que pudieron quedar en el estado persistido.
 _LEGACY_FORMAT  = {"9:16 vertical": "9:16", "Original 16:9": "16:9"}
-_FORMAT_BADGE   = {"9:16": "📱 9:16", "1:1": "⬛ 1:1", "16:9": "🖥 16:9", "split": "⧉ split"}
+_FORMAT_BADGE   = {
+    "9:16":      "📱 9:16",
+    "9:16-full": "📱⬛ 9:16 completo",
+    "1:1":       "⬛ 1:1",
+    "16:9":      "🖥 16:9",
+    "split":     "⧉ split",
+}
 
 
 def normalize_format(val) -> str:
@@ -519,8 +525,9 @@ def framing_controls(clip: dict) -> None:
     fmt = normalize_format(clip.get("formato"))
     idx = clip["index"]
 
-    if fmt == "16:9":
-        st.caption("16:9 usa el plano completo — no hay recorte que ajustar.")
+    if not config.crops(fmt):
+        st.caption(f"**{_FORMAT_LABELS[fmt]}** muestra el plano completo — "
+                   "no hay recorte que ajustar.")
         return
 
     frames = _clip_frames_bgr(clip)
@@ -1351,9 +1358,9 @@ if st.session_state.stage == "analyzed":
                     )
                     format_picker(_clip, f"segfmt_{_pos}", _analysis["suggestion"])
 
-                    # Seguir la toma: solo tiene sentido si hay recorte (16:9 usa
-                    # el plano entero) y si el clip efectivamente cambia de plano.
-                    if normalize_format(_clip.get("formato")) != "16:9":
+                    # Seguir la toma: solo tiene sentido si el formato recorta
+                    # (16:9 y "9:16 completo" muestran el plano entero).
+                    if config.crops(normalize_format(_clip.get("formato"))):
                         _follow = st.checkbox(
                             "🔀 Seguir la toma",
                             value=bool(_clip.get("follow_shot")),

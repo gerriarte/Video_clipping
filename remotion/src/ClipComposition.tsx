@@ -21,10 +21,11 @@ export interface ClipCompositionProps {
   height:           number;
   fps:              number;
   durationInFrames?: number;
-  /** "fill"  = recorta para llenar la pantalla (talking head).
-   *  "fit"   = muestra el plano completo 16:9 sobre fondo borroso (pantalla compartida).
-   *  "split" = dos recortes del mismo video apilados (un host arriba, otro abajo). */
-  layout?:          "fill" | "fit" | "split";
+  /** "fill"      = recorta para llenar la pantalla (talking head).
+   *  "fit"       = plano completo 16:9 sobre fondo borroso (pantalla compartida).
+   *  "letterbox" = plano completo 16:9 centrado sobre NEGRO (barras arriba y abajo).
+   *  "split"     = dos recortes del mismo video apilados (un host arriba, otro abajo). */
+  layout?:          "fill" | "fit" | "letterbox" | "split";
   /** objectPosition X fijo del recorte en modo "fill" (0 = izq, 1 = der).
    *  Fallback cuando no hay keyframes dinámicos. */
   focusX?:          number;
@@ -47,7 +48,7 @@ export interface ClipCompositionProps {
 
 export interface LayoutSegment {
   fromFrame:    number;
-  layout:       "fill" | "fit" | "split";
+  layout:       "fill" | "fit" | "letterbox" | "split";
   focusX?:      number;
   focusTop?:    number;
   focusBottom?: number;
@@ -118,7 +119,7 @@ export const segmentAt = (
  *  de layout y el sonido no puede depender de eso). */
 const ClipVisual: React.FC<{
   src:          string;
-  layout:       "fill" | "fit" | "split";
+  layout:       "fill" | "fit" | "letterbox" | "split";
   posX:         number;
   focusTop:     number;
   focusBottom:  number;
@@ -138,6 +139,28 @@ const ClipVisual: React.FC<{
             height:         "100%",
             objectFit:      "cover",
             objectPosition: `${(posX * 100).toFixed(2)}% 50%`,
+          }}
+        />
+      </AbsoluteFill>
+    ) : layout === "letterbox" ? (
+      /* PLANO COMPLETO SOBRE NEGRO: el 16:9 entero centrado, con barras arriba
+         y abajo. No se pierde nada de la imagen y no hay fondo que distraiga
+         (a diferencia de "fit", que rellena con el mismo video borroso). */
+      <AbsoluteFill
+        style={{
+          display:        "flex",
+          alignItems:     "center",
+          justifyContent: "center",
+          background:     "#000",
+        }}
+      >
+        <OffthreadVideo
+          src={src}
+          muted={muted}
+          style={{
+            width:       "100%",
+            aspectRatio: "16 / 9",
+            objectFit:   "contain",
           }}
         />
       </AbsoluteFill>

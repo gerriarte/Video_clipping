@@ -209,6 +209,31 @@ cuando la cámara va a uno solo. Es lo que necesitan los clips marcados como
 
 En la UI es un checkbox por clip ("🔀 Seguir la toma") en el panel del Paso 3.
 
+### Dos versiones del 9:16   ✅ (2026-08-02)
+
+Antes había un solo "9:16" y era **impredecible**: `auto_layout` decidía entre
+recortar al hablante y mostrar el plano completo sobre fondo borroso, según el
+tamaño de la cara detectada. Ahora son dos formatos explícitos:
+
+| Formato | `base` | Qué hace |
+|---|---|---|
+| `9:16` | `fill` | Recorte vertical a pantalla completa, centrado en quien habla |
+| `9:16-full` | `letterbox` (**nuevo**) | El 16:9 entero centrado sobre negro, barras arriba y abajo |
+
+- Layout `letterbox` en `ClipComposition`: igual que `fit` pero **sin el fondo
+  borroso** — fondo negro liso. `fit` se conserva porque 1:1 lo sigue usando como
+  red de seguridad cuando no hay una cara grande.
+- `allow_fit: False` en el preset de `9:16`: la caída a "fit" existía para no
+  recortar mal cuando no hay cara; ahora eso se elige a mano con `9:16-full`, así
+  que el recorte llena la pantalla siempre. **Ojo:** los clips ya guardados como
+  `9:16` que dependían de esa caída (pantalla compartida, plano abierto) ahora se
+  recortan — hay que pasarlos a `9:16-full` a mano.
+- `crop: True/False` por preset reemplaza los `!= "16:9"` sueltos que había en
+  tres lugares (encuadre manual, "seguir la toma", controles de la UI).
+- La sugerencia automática cambió: "casi sin caras" ya no propone `16:9` sino
+  `9:16-full` — lienzo vertical para redes, pero sin comerse nada de la imagen.
+- `letterbox` no necesita detección de caras: se ahorra esa pasada entera.
+
 ### UX de "Ajustar encuadre"   ✅ (2026-08-02)
 
 Reporte del usuario: *"al realizar cambios en los slides se cierra a veces y no se

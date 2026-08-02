@@ -311,15 +311,14 @@ def suggest_format(summary: dict) -> str:
     Formato sugerido según cómo es la toma a lo largo del clip.
 
     - Dos personas en buena parte del clip → "split" (se ven las dos caras).
-    - Casi nunca hay caras (pantalla compartida, plano abierto) → "16:9", que no
-      recorta y no se come nada.
-    - El resto → "9:16" (su layout automático ya elige entre recorte al hablante
-      y plano completo sobre fondo borroso).
+    - Casi nunca hay caras (pantalla compartida, plano abierto) → "9:16-full":
+      lienzo vertical para redes, pero sin recortar nada de la imagen.
+    - El resto → "9:16" (recorte vertical centrado en quien habla).
     """
     if summary.get("two_shot_ratio", 0) >= SPLIT_RATIO:
         return "split"
     if summary.get("empty_ratio", 0) >= EMPTY_RATIO:
-        return "16:9"
+        return "9:16-full"
     return "9:16"
 
 
