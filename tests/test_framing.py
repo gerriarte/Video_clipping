@@ -52,3 +52,38 @@ def test_crop_from_rect_shape_matches():
     assert 0 < out.shape[1] < 1920
     # aspecto del recorte ≈ target
     assert abs(out.shape[1] / out.shape[0] - A_916) < 0.02
+
+
+# ── El recorte manual está atado al formato con el que se hizo ────────────────
+
+import config
+from pathlib import Path
+from modules.renderer import _resolve_encuadre
+
+
+def manual_clip(fmt=None):
+    c = {"crop_manual": True, "crop_rect": {"x": 0.3, "y": 0.0, "w": 0.5625, "h": 1.0}}
+    if fmt:
+        c["crop_fmt"] = fmt
+    return c
+
+
+def encuadre(clip, fmt):
+    return _resolve_encuadre(Path("no-existe.mp4"), 10.0, fmt, config.FORMAT_PRESETS[fmt], clip)
+
+
+def test_el_recorte_manual_se_usa_en_su_formato():
+    enc = encuadre(manual_clip("1:1"), "1:1")
+    assert enc["manual_crops"] == [{"x": 0.3, "y": 0.0, "w": 0.5625, "h": 1.0}]
+
+
+def test_el_recorte_manual_de_otro_formato_se_ignora():
+    # Un rect cuadrado (1:1) estirado a 9:16 deformaría la imagen: mejor auto.
+    enc = encuadre(manual_clip("1:1"), "9:16")
+    assert enc["manual_crops"] is None
+
+
+def test_los_clips_viejos_sin_crop_fmt_siguen_funcionando():
+    # Guardados antes de que existiera el campo: se asumen del formato actual.
+    enc = encuadre(manual_clip(), "9:16")
+    assert enc["manual_crops"] is not None

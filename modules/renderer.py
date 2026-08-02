@@ -75,6 +75,15 @@ def _resolve_encuadre(clip_path: Path, clip_duration: float, fmt_key: str,
     # ── Override manual (elegido en la UI) ────────────────────────────────────
     # Recorte por rectángulo explícito (permite zoom). Tiene prioridad sobre la
     # autodetección. En 9:16/1:1 recorta a UNA persona aunque haya dos.
+    #
+    # El rectángulo se calculó PARA UN FORMATO (su aspecto está metido en el
+    # ancho/alto guardados): si después se cambió el formato, reusarlo estiraría
+    # la imagen. En ese caso se ignora y decide la autodetección. Los clips
+    # viejos no guardan `crop_fmt`; a esos se les cree (eran del formato actual).
+    _crop_fmt = clip.get("crop_fmt")
+    if _crop_fmt and _crop_fmt != fmt_key:
+        clip = {k: v for k, v in clip.items() if k != "crop_manual"}
+
     if clip.get("crop_manual"):
         if preset.get("base") == "split":
             rt, rb = clip.get("crop_rect_top"), clip.get("crop_rect_bottom")

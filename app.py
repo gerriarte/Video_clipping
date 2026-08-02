@@ -598,7 +598,10 @@ def framing_controls(clip: dict) -> None:
         clip["crop_cy_top"], clip["crop_cy_bottom"] = vyt, vyb
         rt = _crop_rect(src_w, src_h, half_aspect, top, zt, center_y=vyt)
         rb = _crop_rect(src_w, src_h, half_aspect, bot, zb, center_y=vyb)
+        # Los rects llevan metido el aspecto del formato: hay que recordar cuál,
+        # para no reusarlos si después se cambia de formato.
         clip["crop_rect_top"], clip["crop_rect_bottom"] = rt, rb
+        clip["crop_fmt"] = fmt
 
         def _stacked(frame, _rt=rt, _rb=rb):
             ct, cb = _crop_from_rect(frame, _rt), _crop_from_rect(frame, _rb)
@@ -620,6 +623,7 @@ def framing_controls(clip: dict) -> None:
         clip["crop_center"], clip["crop_cy"], clip["zoom"] = center, vy, z
         rect = _crop_rect(src_w, src_h, _fmt_aspect(fmt), center, z, center_y=vy)
         clip["crop_rect"] = rect
+        clip["crop_fmt"] = fmt
         with col_prev:
             _framing_preview(frames, lambda frame: _crop_from_rect(frame, rect), big=big)
 
