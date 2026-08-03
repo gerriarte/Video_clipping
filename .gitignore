@@ -28,6 +28,11 @@ build/
 # Node / Remotion
 remotion/node_modules/
 remotion/out/
+# Episodio Criterio (proyecto Remotion aparte). El VO y captions.json sí se
+# versionan: son la fuente de la sincronía, no media generada.
+remotion-criterio/node_modules/
+remotion-criterio/out/
+remotion-criterio/whisper.cpp/
 # Clip local para previsualizar en Remotion Studio (hardlink a clips/)
 remotion/public/
 components/clip_editor/frontend/node_modules/

@@ -1,0 +1,31 @@
+{
+  "name": "criterio-episodio",
+  "version": "1.0.0",
+  "description": "Episodio vertical · Criterio — animación sincronizada al VO",
+  "scripts": {
+    "dev": "remotion studio",
+    "render": "remotion render CriterioMaster out/criterio.mp4",
+    "cues": "tsx scripts/check-cues.ts",
+    "transcribe": "python scripts/transcribe_fw.py public/audio/vo-criterio.mp3 public/captions.json",
+    "transcribe:whispercpp": "tsx scripts/transcribe.ts public/audio/vo-criterio.mp3 public/captions.json",
+    "upgrade": "remotion upgrade",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@remotion/captions": "4.0.494",
+    "@remotion/cli": "4.0.494",
+    "@remotion/google-fonts": "^4.0.494",
+    "@remotion/install-whisper-cpp": "4.0.494",
+    "@remotion/media-utils": "4.0.494",
+    "@remotion/zod-types": "4.0.494",
+    "react": "19.0.0",
+    "react-dom": "19.0.0",
+    "remotion": "4.0.494",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/react": "19.0.0",
+    "tsx": "4.19.2",
+    "typescript": "5.8.2"
+  }
+}
