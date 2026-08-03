@@ -4,9 +4,12 @@ import { getVideoMetadata } from "@remotion/media-utils";
 import { ClipComposition, ClipCompositionProps } from "./ClipComposition";
 import { ColdOpen, COLD_OPEN_DURATION, COLD_OPEN_FPS } from "./ColdOpen";
 import { CierreOutro, CIERRE_DURATION, CIERRE_FPS } from "./CierreOutro";
-import { Criterio } from "./criterio/Criterio";
-import { criterioSchema, criterioDefaults } from "./criterio/schema";
-import { DURATION, FPS, HEIGHT, WIDTH } from "./criterio/timing";
+
+// Este proyecto es SOLO el render de clips del pipeline (ver
+// config.REMOTION_DIR). Los episodios animados viven en episodios/ —
+// cada uno con su propio proyecto Remotion. La composición "Criterio"
+// que estaba acá era la versión sin sincronizar: quedó archivada en
+// episodios/_archivo/criterio-v1/ y la reemplaza episodios/criterio/.
 
 export const Root: React.FC = () => {
   // Solo para el preview en Remotion Studio: el render desde Python siempre
@@ -26,19 +29,6 @@ export const Root: React.FC = () => {
 
   return (
     <>
-      {/* Episodio editorial de 5 min. Todo el copy es editable desde el panel
-          de props: ver src/criterio/schema.ts. */}
-      <Composition
-        id="Criterio"
-        component={Criterio}
-        durationInFrames={DURATION}
-        fps={FPS}
-        width={WIDTH}
-        height={HEIGHT}
-        schema={criterioSchema}
-        defaultProps={criterioDefaults}
-      />
-
       <Composition
         id="ColdOpen"
         component={ColdOpen}

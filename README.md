@@ -1,4 +1,20 @@
-# Fast Video Clipping
+# Zumo · Ediciones
+
+Dos tracks independientes. Comparten repo, entorno de Python y Remotion;
+no comparten código ni se pisan.
+
+| Track | Dónde | Qué es |
+|---|---|---|
+| **1 · Cortes** | raíz del repo (`app.py`, `modules/`, `remotion/`) | Pipeline de clips: YouTube → Claude → ffmpeg → Remotion → captions. Todo lo que sigue de este README. |
+| **2 · Episodios** | [`episodios/`](episodios/) | Videos animados verticales sincronizados al VO, uno por carpeta. Ver [`episodios/COMO-ENTREGAR.md`](episodios/COMO-ENTREGAR.md). |
+
+`remotion/` es **solo** el render de clips del Track 1 (lo invoca
+`config.REMOTION_DIR`). Cada episodio del Track 2 tiene su propio
+proyecto Remotion adentro de su carpeta.
+
+---
+
+# Track 1 · Fast Video Clipping
 
 Pipeline automatizado que descarga un video de YouTube, identifica los mejores momentos con Claude AI, corta los clips con ffmpeg, convierte a formato vertical 9:16 con Remotion y genera captions para TikTok, Instagram y YouTube Shorts — todo desde una interfaz web local.
 

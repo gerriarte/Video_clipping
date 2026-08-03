@@ -1,0 +1,11 @@
+node_modules
+out
+build
+whisper.cpp
+
+# Derivados de _entrada/ — los repone `npm run ingest`. El original vive
+# en _entrada/ y se versiona una sola vez.
+public/audio/*
+public/video/*
+!public/audio/.gitkeep
+!public/video/.gitkeep

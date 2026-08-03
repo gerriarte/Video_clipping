@@ -1,5 +1,0 @@
-node_modules
-out
-whisper.cpp
-public/audio/*.wav
-public/video/*.mp4
