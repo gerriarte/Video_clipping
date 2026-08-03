@@ -142,7 +142,9 @@ export const AccumulationContrast: React.FC<{
                     position: 'absolute',
                     left: 0,
                     right: 0,
-                    bottom: i * 8,
+                    // El paso sale del alto de la caja: si es fijo, con
+                    // una caja más alta la columna deja de llenarse.
+                    bottom: Math.round(i * (height / lines)),
                     height: STROKE,
                     background: COLOR.bone,
                     opacity: on ? 0.55 : 0,
@@ -488,9 +490,11 @@ export const TwoHalves: React.FC<{
         </g>
       </svg>
 
+      {/* Debajo del trazo, no encima: a la altura del radio las etiquetas
+          quedaban tachadas por la propia circunferencia. */}
       <FadeUp
         at={leftAt ?? at + 24}
-        style={{ position: 'absolute', left: 0, top: cyBase + r - 20, width: 340 }}
+        style={{ position: 'absolute', left: 0, top: cyBase + r + 34, width: 340 }}
       >
         <div style={{ ...TYPE.label }}>{left}</div>
       </FadeUp>
@@ -499,7 +503,7 @@ export const TwoHalves: React.FC<{
         style={{
           position: 'absolute',
           right: 0,
-          top: cyBase + r - 20,
+          top: cyBase + r + 34,
           width: 340,
           textAlign: 'right',
         }}

@@ -3,6 +3,7 @@ import { AbsoluteFill, Sequence } from 'remotion';
 import { z } from 'zod';
 import { COLOR, LAYOUT, STROKE, TYPE } from '../../theme';
 import { AnimPane, BrandBar, FacePane } from '../../shared/FacePane';
+import { MotionPane, type Motif } from '../../components/MotionPane';
 import { DiagonalWipe } from '../../shared/DiagonalWipe';
 import { FadeUp, Reveal, useDraw } from '../../shared/anim';
 import {
@@ -16,12 +17,22 @@ import { useCue } from '../../shared/useCue';
 const EP = 'Episodio · Criterio';
 
 /**
- * Sin A-roll grabado, los bloques compuestos para el split corren en
- * "solo": misma caja de 960, centrada, sin la mitad de abajo vacía. En
- * cuanto existan los clips a cámara se pasa el path por props y el bloque
- * vuelve al split, sin tocar una línea de animación.
+ * Ningún bloque pinta su propio fondo: el negro y la textura los pone el
+ * <Backdrop> del master. Un AbsoluteFill opaco acá tapaba el fondo entero
+ * del episodio —trama, retícula y reloj incluidos.
  */
-const paneMode = (arollSrc?: string) => (arollSrc ? 'split' : 'solo');
+
+/**
+ * El pane de abajo. Con A-roll, el rostro; sin A-roll, el motivo animado
+ * del bloque con la voz dibujada encima. En los dos casos el bloque va en
+ * split: la caja de arriba no cambia y el cuadro se usa entero.
+ */
+const BottomPane: React.FC<{ arollSrc?: string; motif: Motif }> = ({ arollSrc, motif }) =>
+  arollSrc ? (
+    <FacePane src={arollSrc} offsetY={-180} scale={1.15} />
+  ) : (
+    <MotionPane motif={motif} />
+  );
 
 // ═══════════════════════════════════════════════════════════════
 // C1 · ARRANQUE — 0:00–0:51
@@ -60,10 +71,10 @@ export const C1_Arranque: React.FC<z.infer<typeof c1Schema>> = ({
   const fQuestion = useCue('c1.question', 959);
 
   return (
-    <AbsoluteFill style={{ backgroundColor: COLOR.bg }}>
+    <AbsoluteFill>
       <BrandBar episode={EP} />
 
-      <AnimPane mode={paneMode(arollSrc)}>
+      <AnimPane mode="split">
         <Sequence durationInFrames={fQual - 12} name="contradicción">
           {/* El VO tarda siete segundos en llegar a la primera cifra. Sin
               esto la pantalla arranca vacía, que es peor que cualquier
@@ -78,7 +89,7 @@ export const C1_Arranque: React.FC<z.infer<typeof c1Schema>> = ({
               se dibujan siempre, así que montados desde el frame 0 se veían
               dos cajas vacías durante todo el hook. */}
           <Sequence from={fPair} name="par">
-            <div style={{ position: 'absolute', left: LAYOUT.margin, top: 40 }}>
+            <div style={{ position: 'absolute', left: LAYOUT.margin, top: 230 }}>
               <ContradictionPair
                 at={0}
                 gapAt={fGap - fPair}
@@ -91,7 +102,7 @@ export const C1_Arranque: React.FC<z.infer<typeof c1Schema>> = ({
 
         <Sequence from={fQual - 12} durationInFrames={fQuestion - fQual} name="cualidades">
           <DiagonalWipe at={0} duration={24} />
-          <div style={{ position: 'absolute', left: LAYOUT.margin, top: 200 }}>
+          <div style={{ position: 'absolute', left: LAYOUT.margin, top: 285 }}>
             {qualities.map((q, i) => (
               <Reveal
                 key={q}
@@ -119,7 +130,9 @@ export const C1_Arranque: React.FC<z.infer<typeof c1Schema>> = ({
         </Sequence>
       </AnimPane>
 
-      {arollSrc ? <FacePane src={arollSrc} offsetY={-180} scale={1.15} /> : null}
+      {/* El filtro: marcas que cruzan el cuadro y se apagan al pasar el
+          corte. El argumento del bloque, hecho movimiento. */}
+      <BottomPane arollSrc={arollSrc} motif="filter" />
     </AbsoluteFill>
   );
 };
@@ -164,7 +177,7 @@ export const C2_QueEs: React.FC<z.infer<typeof c2Schema>> = ({
   const fClose = useCue('c2.closing', 1069);
 
   return (
-    <AbsoluteFill style={{ backgroundColor: COLOR.bg }}>
+    <AbsoluteFill>
       <BrandBar episode={EP} />
       <AnimPane mode="full">
         <Sequence durationInFrames={fCols - 12} name="definición">
@@ -202,9 +215,13 @@ export const C2_QueEs: React.FC<z.infer<typeof c2Schema>> = ({
 
         <Sequence from={fCols - 12} durationInFrames={fClose - fCols} name="acumulación">
           <DiagonalWipe at={0} duration={24} />
-          <div style={{ position: 'absolute', left: LAYOUT.margin, top: 180 }}>
+          {/* A pane completo hay alto de sobra: las columnas lo usan. La
+              densidad de la izquierda es el argumento, y cuanto más alta
+              es la caja, más se lee. */}
+          <div style={{ position: 'absolute', left: LAYOUT.margin, top: 200 }}>
             <AccumulationContrast
               at={24}
+              height={840}
               span={fClose - fCols}
               leftLabel={leftLabel}
               rightLabel={rightLabel}
@@ -298,14 +315,14 @@ export const C3_Precio: React.FC<z.infer<typeof c3Schema>> = ({
   const fClose = useCue('c3.closing', 1458);
 
   return (
-    <AbsoluteFill style={{ backgroundColor: COLOR.bg }}>
+    <AbsoluteFill>
       <BrandBar episode={EP} />
       <AnimPane mode="full">
         <Sequence durationInFrames={fTrap - 12} name="cruce">
-          <div style={{ position: 'absolute', left: LAYOUT.margin, top: 180 }}>
-            <PriceCross at={fCross} labelDown={crossDown} labelUp={crossUp} />
+          <div style={{ position: 'absolute', left: LAYOUT.margin, top: 200 }}>
+            <PriceCross at={fCross} height={720} labelDown={crossDown} labelUp={crossUp} />
           </div>
-          <div style={{ position: 'absolute', left: LAYOUT.margin, top: 900, width: 936 }}>
+          <div style={{ position: 'absolute', left: LAYOUT.margin, top: 1010, width: 936 }}>
             <Reveal at={fScarcity} style={{ ...TYPE.displayL }}>
               {scarcity}
             </Reveal>

@@ -78,7 +78,8 @@ exactamente lo que el guion no dice.
 | `remate` | 3:04 | La segunda etiqueta |
 | `ingrediente equivocado` | 3:10 | Wipe. Veredicto |
 
-Todo el bloque va a cámara cuando exista el A-roll. En voz en off suena a
+Todo el bloque va a cámara cuando exista el A-roll; mientras tanto, el
+pane de abajo lo ocupa el motivo del descarte. En voz en off suena a
 denuncia; a cámara suena a acusación amable, que es lo que corresponde.
 
 ## C5 · La traba y la salida — 3:18–4:31

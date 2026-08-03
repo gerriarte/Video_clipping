@@ -46,6 +46,8 @@ export const SAFE = {
 export const LAYOUT = {
   margin: 72,
   baseline: 12,
+  /** Reloj del episodio, justo debajo de la barra de marca. */
+  progressY: 132,
   /** SPLIT: pane de animación */
   splitPane: { y: 140, height: 960 },
   /** SPLIT: costura entre panes */
@@ -54,12 +56,6 @@ export const LAYOUT = {
   facePane: { y: 1100, height: 820 },
   /** FULL: pane de animación a sangre */
   fullPane: { y: 140, height: 1780 },
-  /**
-   * SOLO: bloques diseñados para el split, corriendo sin rostro. Mantienen
-   * la caja de 960 del split —si no, el contenido queda pegado arriba y
-   * media pantalla vacía— pero centrada sobre la banda de subtítulos.
-   */
-  soloPane: { y: 330, height: 960 },
   /** Banda de subtítulos en SPLIT: justo arriba de la costura. */
   subtitles: { y: 980, height: 160 },
   /**

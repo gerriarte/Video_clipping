@@ -2,7 +2,7 @@ import React from 'react';
 import { AbsoluteFill, Easing, OffthreadVideo, interpolate, staticFile, useCurrentFrame } from 'remotion';
 import { CANVAS, COLOR, LAYOUT, STROKE, WIPE_ANGLE } from '../theme';
 
-export type Mode = 'split' | 'full' | 'solo';
+export type Mode = 'split' | 'full';
 
 /**
  * Pane de rostro — modo SPLIT.
@@ -93,16 +93,12 @@ export const FacePane: React.FC<{
  * Contenedor del pane de animación. Cambia de alto según el modo.
  * En FULL el contenido legible sigue confinado a y < SAFE.bottom;
  * el espacio de abajo es solo fondo, grano y elementos decorativos.
- *
- * SOLO es FULL para un bloque compuesto para el split: conserva la caja
- * de 960 para que el encuadre no se estire, pero centrada.
  */
 export const AnimPane: React.FC<{
   mode: Mode;
   children: React.ReactNode;
 }> = ({ mode, children }) => {
-  const box =
-    mode === 'split' ? LAYOUT.splitPane : mode === 'solo' ? LAYOUT.soloPane : LAYOUT.fullPane;
+  const box = mode === 'split' ? LAYOUT.splitPane : LAYOUT.fullPane;
   return (
     <AbsoluteFill style={{ top: box.y, height: box.height, overflow: 'hidden' }}>
       {children}

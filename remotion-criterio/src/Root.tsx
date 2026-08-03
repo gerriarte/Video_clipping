@@ -1,8 +1,10 @@
 import React from 'react';
-import { Audio, Composition, staticFile } from 'remotion';
-import { CANVAS } from './theme';
-import { BLOCK, CRITERIO_TOTAL, type BlockKey } from './shared/cues';
+import { AbsoluteFill, Audio, Composition, staticFile } from 'remotion';
+import { CANVAS, COLOR } from './theme';
+import { BLOCK, BLOCKS, CRITERIO_TOTAL, type BlockKey } from './shared/cues';
 import { CueScope } from './shared/useCue';
+import { VoiceProvider } from './shared/voice';
+import { Backdrop, BackdropTop } from './shared/Backdrop';
 import { CriterioMaster, criterioSchema } from './compositions/criterio/CriterioMaster';
 import {
   C1_Arranque,
@@ -119,12 +121,19 @@ const C5 = {
 const BlockPreview: React.FC<{ block: BlockKey; children: React.ReactNode }> = ({
   block,
   children,
-}) => (
-  <>
-    <Audio src={staticFile(VO_CRITERIO)} trimBefore={BLOCK[block].start} />
-    <CueScope start={BLOCK[block].start}>{children}</CueScope>
-  </>
-);
+}) => {
+  const start = BLOCK[block].start;
+  const index = BLOCKS.findIndex((b) => b.key === block);
+  return (
+    <VoiceProvider src={VO_CRITERIO} startFrom={start}>
+      <AbsoluteFill style={{ backgroundColor: COLOR.bg }} />
+      <Audio src={staticFile(VO_CRITERIO)} trimBefore={start} />
+      <Backdrop total={CRITERIO_TOTAL} blockIndex={index} blockCount={BLOCKS.length} />
+      <CueScope start={start}>{children}</CueScope>
+      <BackdropTop />
+    </VoiceProvider>
+  );
+};
 
 export const RemotionRoot: React.FC = () => (
   <>

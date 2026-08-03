@@ -3,6 +3,7 @@ import { AbsoluteFill, Sequence } from 'remotion';
 import { z } from 'zod';
 import { COLOR, LAYOUT, TYPE } from '../../theme';
 import { AnimPane, BrandBar, FacePane } from '../../shared/FacePane';
+import { MotionPane, type Motif } from '../../components/MotionPane';
 import { DiagonalWipe } from '../../shared/DiagonalWipe';
 import { FadeUp, Reveal } from '../../shared/anim';
 import { PriceKey, PriceTags, ProductiveLife, TwoHalves } from '../../components/Criterio';
@@ -10,8 +11,26 @@ import { useCue } from '../../shared/useCue';
 
 const EP = 'Episodio · Criterio';
 
-/** Ver C1_C2_C3: sin A-roll, el bloque de split corre en "solo". */
-const paneMode = (arollSrc?: string) => (arollSrc ? 'split' : 'solo');
+/** Ver C1_C2_C3: con A-roll el rostro, sin A-roll el motivo animado. */
+const BottomPane: React.FC<{
+  arollSrc?: string;
+  motif: Motif;
+  enterAt?: number;
+  exitAt?: number;
+  startFrom?: number;
+}> = ({ arollSrc, motif, enterAt = 0, exitAt, startFrom }) =>
+  arollSrc ? (
+    <FacePane
+      src={arollSrc}
+      offsetY={-180}
+      scale={1.15}
+      enterAt={enterAt}
+      exitAt={exitAt}
+      startFrom={startFrom}
+    />
+  ) : (
+    <MotionPane motif={motif} enterAt={enterAt} exitAt={exitAt} />
+  );
 
 // ═══════════════════════════════════════════════════════════════
 // C4 · EL ABSURDO — 2:25–3:18
@@ -44,12 +63,12 @@ export const C4_Absurdo: React.FC<z.infer<typeof c4Schema>> = ({
   const fVerdict = useCue('c4.verdict', 1350);
 
   return (
-    <AbsoluteFill style={{ backgroundColor: COLOR.bg }}>
+    <AbsoluteFill>
       <BrandBar episode={EP} />
 
-      <AnimPane mode={paneMode(arollSrc)}>
+      <AnimPane mode="split">
         <Sequence durationInFrames={fPivot - 12} name="vida productiva">
-          <div style={{ position: 'absolute', left: LAYOUT.margin, top: 240 }}>
+          <div style={{ position: 'absolute', left: LAYOUT.margin, top: 370 }}>
             <ProductiveLife at={fLife} cutAt={fCut} />
           </div>
         </Sequence>
@@ -65,7 +84,7 @@ export const C4_Absurdo: React.FC<z.infer<typeof c4Schema>> = ({
 
         <Sequence from={fTags} durationInFrames={fVerdict - fTags} name="precios">
           <DiagonalWipe at={0} duration={24} />
-          <div style={{ position: 'absolute', left: LAYOUT.margin, top: 180 }}>
+          <div style={{ position: 'absolute', left: LAYOUT.margin, top: 240 }}>
             {/* Cada etiqueta entra cuando el VO la nombra: "sueldos de
                 guerra" primero, "precio de remate" nueve segundos después. */}
             <PriceTags at={24} ats={[12, fTag2 - fTags]} rows={tags} />
@@ -82,7 +101,9 @@ export const C4_Absurdo: React.FC<z.infer<typeof c4Schema>> = ({
         </Sequence>
       </AnimPane>
 
-      {arollSrc ? <FacePane src={arollSrc} offsetY={-180} scale={1.15} /> : null}
+      {/* El descarte: una onda que voltea marcas de la retícula y las
+          deja recuperarse atrás. El mercado no lo hace una vez. */}
+      <BottomPane arollSrc={arollSrc} motif="discard" />
     </AbsoluteFill>
   );
 };
@@ -139,12 +160,12 @@ export const C5_Salida: React.FC<z.infer<typeof c5Schema>> = (props) => {
   const questionsFrom = fQ1 - 24;
 
   return (
-    <AbsoluteFill style={{ backgroundColor: COLOR.bg }}>
+    <AbsoluteFill>
       <BrandBar episode={EP} />
 
       {/* ── Tramo 1 · la traba ────────────────────────────────── */}
       <Sequence durationInFrames={halvesFrom} name="traba">
-        <AnimPane mode={paneMode(props.arollSrc)}>
+        <AnimPane mode="split">
           <Sequence durationInFrames={fMirror - 12} name="identidad">
             <div style={{ position: 'absolute', left: LAYOUT.margin, top: 120, width: 936 }}>
               <Reveal at={fBarrier} style={{ ...TYPE.displayL }}>
@@ -173,9 +194,10 @@ export const C5_Salida: React.FC<z.infer<typeof c5Schema>> = (props) => {
             </AbsoluteFill>
           </Sequence>
         </AnimPane>
-        {props.arollSrc ? (
-          <FacePane src={props.arollSrc} offsetY={-180} scale={1.15} exitAt={halvesFrom - 20} />
-        ) : null}
+        {/* La convergencia: dos familias de marcas que se encuentran en
+            el eje. Prepara los dos círculos sin adelantarlos. Sale
+            cuando entra el diagrama, igual que saldría el rostro. */}
+        <BottomPane arollSrc={props.arollSrc} motif="converge" exitAt={halvesFrom - 32} />
       </Sequence>
 
       {/* ── Tramo 2 · la salida ───────────────────────────────── */}
@@ -206,41 +228,44 @@ export const C5_Salida: React.FC<z.infer<typeof c5Schema>> = (props) => {
 
       {/* ── Tramo 3 · las dos preguntas ───────────────────────── */}
       <Sequence from={questionsFrom} name="preguntas">
-        {/* Sin rostro este tramo va a pane completo: las dos preguntas más
-            el veredicto no entran en la caja de 960 y el cierre del
-            episodio quedaba cortado abajo. */}
-        <AnimPane mode={props.arollSrc ? 'split' : 'full'}>
+        <AnimPane mode="split">
           <DiagonalWipe at={0} duration={24} />
-          <div style={{ position: 'absolute', left: LAYOUT.margin, top: 200, width: 936 }}>
+          <div style={{ position: 'absolute', left: LAYOUT.margin, top: 110, width: 936 }}>
+            {/* Un cuerpo más chico que el resto del episodio: las dos
+                preguntas y el veredicto tienen que convivir en la caja de
+                960 sin que el cierre se caiga abajo del corte. */}
             {props.questions.map((q, i) => {
               const at = [fQ1, fQ2][i] - questionsFrom;
               return (
-                <div key={q} style={{ display: 'flex', gap: 28, marginBottom: 64 }}>
+                <div key={q} style={{ display: 'flex', gap: 28, marginBottom: 48 }}>
                   <FadeUp at={at}>
-                    <div style={{ ...TYPE.footnote, paddingTop: 14 }}>
+                    <div style={{ ...TYPE.footnote, paddingTop: 12 }}>
                       {String(i + 1).padStart(2, '0')}
                     </div>
                   </FadeUp>
-                  <Reveal at={at} style={{ ...TYPE.displayM, maxWidth: 820 }} tracking="-0.02em">
+                  <Reveal
+                    at={at}
+                    style={{ ...TYPE.displayM, fontSize: 60, maxWidth: 800 }}
+                    tracking="-0.02em"
+                  >
                     {q}
                   </Reveal>
                 </div>
               );
             })}
-            <Reveal at={fVerdict - questionsFrom} style={{ ...TYPE.displayL, marginTop: 40 }}>
+            <Reveal at={fVerdict - questionsFrom} style={{ ...TYPE.displayM, marginTop: 36 }}>
               {props.verdict}
             </Reveal>
           </div>
         </AnimPane>
-        {props.arollSrc ? (
-          <FacePane
-            src={props.arollSrc}
-            offsetY={-180}
-            scale={1.15}
-            enterAt={0}
-            startFrom={questionsFrom}
-          />
-        ) : null}
+        {/* Vuelve el pane de abajo —el rostro, cuando exista— para el
+            cierre: la voz sigue ahí hasta la última palabra. */}
+        <BottomPane
+          arollSrc={props.arollSrc}
+          motif="converge"
+          enterAt={0}
+          startFrom={questionsFrom}
+        />
       </Sequence>
     </AbsoluteFill>
   );
