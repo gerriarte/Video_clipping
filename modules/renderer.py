@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import config
+from modules.finish import finish
 from modules.layout_detector import (
     detect_layout,
     detect_split,
@@ -141,6 +142,30 @@ def _resolve_encuadre(clip_path: Path, clip_duration: float, fmt_key: str,
     return base
 
 
+def clip_aspect(clip_path) -> float:
+    """
+    Aspecto (ancho/alto) del archivo de clip, leído con ffprobe.
+
+    La composición lo necesita para calcular el recorte horizontal: el <Video>
+    de @remotion/media dibuja en canvas y no tiene `object-position`, así que ya
+    no lo resuelve el CSS. Si no se puede leer, 16:9 (todo el material del canal
+    lo es) — mejor un encuadre razonable que reventar el render.
+    """
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height", "-of", "json", str(clip_path)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        s = json.loads(r.stdout)["streams"][0]
+        w, h = float(s["width"]), float(s["height"])
+        if w > 0 and h > 0:
+            return w / h
+    except Exception:
+        pass
+    return 16.0 / 9.0
+
+
 def _source_aspect(frame_path) -> float:
     """Aspecto (ancho/alto) de la fuente, leído de una muestra del análisis."""
     try:
@@ -210,6 +235,7 @@ def render_clip(
     focus_bottom: float = 0.5,
     manual_crops: list | None = None,
     layout_segments: list | None = None,
+    source_aspect: float | None = None,
     concurrency: int | None = None,
 ) -> Path:
     """
@@ -242,6 +268,7 @@ def render_clip(
         "focusKeyframes": focus_keyframes or [],
         "focusTop":    focus_top,
         "focusBottom": focus_bottom,
+        "sourceAspect": source_aspect or clip_aspect(clip_path),
     }
     if manual_crops:
         props["manualCrops"] = manual_crops
@@ -264,7 +291,9 @@ def render_clip(
             "--width",  str(width),
             "--height", str(height),
             "--fps",    str(config.OUTPUT_FPS),
-            "--crf",    str(config.OUTPUT_CRF),
+            # Render intermedio: lo vuelve a tocar el arte final, así que se
+            # guarda con más calidad que la del archivo de salida.
+            "--crf",    str(config.RENDER_CRF),
         ]
         if concurrency:
             cmd.append(f"--concurrency={concurrency}")
@@ -299,6 +328,7 @@ def render_cover(
     focus_bottom: float = 0.5,
     manual_crops: list | None = None,
     layout_segments: list | None = None,
+    source_aspect: float | None = None,
 ) -> Path:
     """
     Genera la portada (JPG) renderizando UN frame del clip con la misma composición
@@ -321,6 +351,7 @@ def render_cover(
         "focusKeyframes": focus_keyframes or [],
         "focusTop":    focus_top,
         "focusBottom": focus_bottom,
+        "sourceAspect": source_aspect or clip_aspect(clip_path),
     }
     if manual_crops:
         props["manualCrops"] = manual_crops
@@ -341,7 +372,8 @@ def render_cover(
             "--width",  str(width),
             "--height", str(height),
             "--image-format", "jpeg",
-            "--jpeg-quality", "90",
+            # La portada es una sola imagen: no hay razón para ahorrar acá.
+            "--jpeg-quality", "95",
         ]
 
         result = subprocess.run(
@@ -380,6 +412,10 @@ def _render_one(clip: dict, output_dir: Path, clip_url: str,
     preset  = config.FORMAT_PRESETS[fmt_key]
     width, height = preset["width"], preset["height"]
 
+    # Se lee una vez y se reusa en el video y en la portada, para que la portada
+    # no pueda quedar encuadrada distinto que el clip.
+    src_aspect = clip_aspect(clip["clip_path"])
+
     enc = _resolve_encuadre(clip["clip_path"], clip_duration, fmt_key, preset, clip)
     layout       = enc["layout"]
     focus        = enc["focus_x"]
@@ -409,9 +445,14 @@ def _render_one(clip: dict, output_dir: Path, clip_url: str,
 
     _log(f"  🎬 {title} — {preset['label']} · {enc['badge']}")
 
+    # Remotion escribe un crudo y el arte final produce el archivo definitivo.
+    # El crudo va al lado del destino (mismo disco) para que no haya que copiar
+    # entre volúmenes, y se borra apenas termina.
+    raw_path = output_path.with_name(f".{output_path.stem}.raw.mp4")
+
     render_clip(
         clip_path=clip["clip_path"],
-        output_path=output_path,
+        output_path=raw_path,
         width=width,
         height=height,
         clip_title=title,
@@ -424,8 +465,24 @@ def _render_one(clip: dict, output_dir: Path, clip_url: str,
         focus_bottom=focus_bottom,
         manual_crops=manual_crops,
         layout_segments=layout_segments,
+        source_aspect=src_aspect,
         concurrency=concurrency,
     )
+
+    # ── Arte final ────────────────────────────────────────────────────────────
+    # Si falla, el crudo igual sirve: se lo renombra al destino y se avisa. Es
+    # preferible entregar el clip sin realce que perder el render entero.
+    try:
+        finish(
+            raw_path, output_path,
+            sharpen=config.FINISH_SHARPEN,
+            denoise=config.FINISH_DENOISE,
+            crf=config.OUTPUT_CRF,
+        )
+        raw_path.unlink(missing_ok=True)
+    except Exception as e:
+        _log(f"     ⚠️  Arte final falló ({e}); queda el render crudo.")
+        raw_path.replace(output_path)
 
     # Portada: mejor frame con cara (o punto medio), mismo recorte, sin texto.
     cover_path  = output_dir / f"{name} - portada.jpg"
@@ -446,6 +503,7 @@ def _render_one(clip: dict, output_dir: Path, clip_url: str,
             focus_bottom=focus_bottom,
             manual_crops=manual_crops,
             layout_segments=layout_segments,
+            source_aspect=src_aspect,
         )
     except Exception as e:
         _log(f"     ⚠️  No se pudo generar la portada: {e}")

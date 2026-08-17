@@ -49,8 +49,18 @@ def download_video(
     output_dir.mkdir(parents=True, exist_ok=True)
     template = str(output_dir / "%(id)s.%(ext)s")
 
+    # Todo lo que sigue en el pipeline trabaja sobre este archivo, así que acá se
+    # baja lo mejor que haya. El tope de 1080 que estaba antes tiraba resolución
+    # cuando el episodio existía en 1440p/4K, y eso importa el doble en vertical:
+    # el recorte 9:16 de un 1080p deja una franja de solo 607 px de ancho real,
+    # que después hay que ampliar a 1080. Desde 1440p esa franja ya son 810 px.
+    #
+    # `-S res,fps,vbr` ordena por resolución, después fps y después bitrate, así
+    # que entre dos streams de la misma resolución se queda con el de más bits
+    # (antes podía elegir uno de la mitad de bitrate).
     cmd = _YT_DLP + [
-        "--format", "bestvideo[height<=1080]+bestaudio/best[height<=1080]",
+        "--format", "bestvideo+bestaudio/best",
+        "--format-sort", "res,fps,vbr",
         "--merge-output-format", "mp4",
         "--write-auto-subs",
         "--sub-langs", "es,es-419,es-ES,es-MX,es.*",

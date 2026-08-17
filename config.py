@@ -73,7 +73,21 @@ TARGET_CLIPS       = 10     # Cantidad de clips a extraer por video
 OUTPUT_WIDTH       = 1080
 OUTPUT_HEIGHT      = 1920   # 9:16
 OUTPUT_FPS         = 30
-OUTPUT_CRF         = 18     # calidad del render Remotion (menor = mejor; 18 ≈ visualmente sin pérdida)
+OUTPUT_CRF         = 18     # calidad del archivo FINAL (menor = mejor; 18 ≈ visualmente sin pérdida)
+
+# Calidad del render intermedio de Remotion. Es un archivo temporal que después
+# vuelve a pasar por ffmpeg en el arte final, así que se guarda con más calidad
+# que la de salida: si se encodeara ya a 18, la segunda pasada partiría de algo
+# degradado y sumaría una generación de pérdida encima.
+RENDER_CRF         = 14
+
+# Arte final (modules/finish.py): realce que recupera parte de la definición que
+# pierde el escalador del navegador al ampliar el recorte vertical.
+# Ponelo en False si preferís el render crudo.
+FINISH_SHARPEN     = True
+# Destramado previo. Apagado: sobre este material no cambió nada medible y de
+# más ablanda. Encendelo si la fuente viene ruidosa.
+FINISH_DENOISE     = False
 
 # Cuántos clips se renderizan a la vez. Cada render levanta su propio Chromium,
 # así que esto multiplica la RAM: 2 es un buen default y con 8+ núcleos rinde.
