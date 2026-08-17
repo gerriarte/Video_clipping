@@ -17,8 +17,13 @@ from typing import Callable
 
 from modules.audio_edit import (
     LOUDNORM_FILTER,
+    OUTPUT_RATE,
     SNAP_WINDOW,
+    SPEECH_FILTER,
     detect_silences,
+    loudnorm_filter,
+    measure_loudness,
+    measure_loudness_complex,
     segments_duration,
     snap_bounds,
     speech_segments,
@@ -52,8 +57,39 @@ def probe_duration(path) -> float:
         return 0.0
 
 
+def build_audio_chain(segments: list, base: float, fade: float = JUMPCUT_FADE) -> str:
+    """
+    Cadena de audio sola (sin video): recorta los mismos tramos que el clip, los
+    empalma con fundidos y limpia el retumbe.
+
+    Existe aparte porque la primera pasada de `loudnorm` tiene que MEDIR
+    exactamente este audio — el del clip terminado, con los jump cuts ya
+    aplicados. Medir el tramo entero daría una corrección para otro material.
+    """
+    parts, labels = [], []
+    for i, (s, e) in enumerate(segments):
+        rs, re_ = max(0.0, s - base), max(0.0, e - base)
+        dur = max(0.0, re_ - rs)
+        f = min(fade, dur / 2) if dur else 0.0
+        af = [f"atrim=start={rs:.3f}:end={re_:.3f}", "asetpts=PTS-STARTPTS"]
+        if f > 0:
+            af.append(f"afade=t=in:st=0:d={f:.3f}")
+            af.append(f"afade=t=out:st={max(0.0, dur - f):.3f}:d={f:.3f}")
+        parts.append(f"[0:a]{','.join(af)}[m{i}]")
+        labels.append(f"[m{i}]")
+
+    if len(segments) > 1:
+        parts.append(f"{''.join(labels)}concat=n={len(segments)}:v=0:a=1[cat]")
+        last = "[cat]"
+    else:
+        last = labels[0]
+    parts.append(f"{last}{SPEECH_FILTER}[aout]")
+    return ";".join(parts)
+
+
 def build_concat_filter(segments: list, base: float, loudness: bool = True,
-                        fade: float = JUMPCUT_FADE) -> str:
+                        fade: float = JUMPCUT_FADE,
+                        loudnorm: str | None = None) -> str:
     """
     filter_complex que pega varios tramos del mismo video en uno solo.
 
@@ -79,7 +115,10 @@ def build_concat_filter(segments: list, base: float, loudness: bool = True,
     interleaved = "".join(v + a for v, a in zip(vlabels, alabels))
     if loudness:
         parts.append(f"{interleaved}concat=n={len(segments)}:v=1:a=1[v][araw]")
-        parts.append(f"[araw]{LOUDNORM_FILTER}[a]")
+        # El mismo orden que en `build_audio_chain`: primero se limpia el
+        # retumbe y después se normaliza, para que la medición y la corrección
+        # se hagan sobre el audio ya filtrado.
+        parts.append(f"[araw]{SPEECH_FILTER},{loudnorm or LOUDNORM_FILTER}[a]")
     else:
         parts.append(f"{interleaved}concat=n={len(segments)}:v=1:a=1[v][a]")
     return ";".join(parts)
@@ -101,7 +140,9 @@ def cut_clip(
 
     segments: tramos absolutos a conservar (jump cuts). Si son varios se pegan
               en un solo archivo; si es None se corta [start, end] de corrido.
-    loudness: normaliza a -14 LUFS (lo que esperan TikTok/IG/Shorts).
+    loudness: normaliza a -14 LUFS (lo que esperan TikTok/IG/Shorts) en dos
+              pasadas: una mide el audio final y la otra corrige. Si la medición
+              falla se usa una sola pasada, como antes.
     progress_fn: callback que recibe cada línea de progreso de ffmpeg.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -114,15 +155,36 @@ def cut_clip(
     span     = max(0.0, segments[-1][1] - base)
     duration = segments_duration(segments)
 
-    cmd = ["ffmpeg", "-ss", f"{base:.3f}", "-t", f"{span:.3f}", "-i", str(video_path)]
+    seek = ["-ss", f"{base:.3f}", "-t", f"{span:.3f}"]
+
+    # ── Primera pasada: medir ─────────────────────────────────────────────────
+    # Se mide el audio ya recortado y empalmado, que es el que va a salir. Es
+    # solo audio, así que cuesta poco aunque el episodio dure dos horas.
+    norm = LOUDNORM_FILTER
+    if loudness:
+        if progress_fn:
+            progress_fn("Midiendo sonoridad…")
+        chain = build_audio_chain(segments, base)
+        # ffmpeg no acepta un filter_complex con etiquetas en -af: para el caso
+        # de un solo tramo alcanza con la cadena simple.
+        if len(segments) > 1:
+            medido = measure_loudness_complex(video_path, chain, seek)
+        else:
+            medido = measure_loudness(video_path, SPEECH_FILTER, seek)
+        norm = loudnorm_filter(medido)
+        if progress_fn and not medido:
+            progress_fn("⚠️ No se pudo medir la sonoridad; se normaliza en una pasada.")
+
+    cmd = ["ffmpeg"] + seek + ["-i", str(video_path)]
 
     if len(segments) > 1:
         cmd += [
-            "-filter_complex", build_concat_filter(segments, base, loudness=loudness),
+            "-filter_complex",
+            build_concat_filter(segments, base, loudness=loudness, loudnorm=norm),
             "-map", "[v]", "-map", "[a]",
         ]
     elif loudness:
-        cmd += ["-af", LOUDNORM_FILTER]
+        cmd += ["-af", f"{SPEECH_FILTER},{norm}"]
 
     cmd += [
         "-c:v", "libx264",
@@ -130,6 +192,9 @@ def cut_clip(
         "-crf", "18",
         "-c:a", "aac",
         "-b:a", "192k",
+        # Explícito además del aresample del filtro: si alguna vez se corta sin
+        # normalizar, el clip igual sale a 48 kHz y no arrastra el 96 de antes.
+        "-ar", str(OUTPUT_RATE),
         "-avoid_negative_ts", "make_zero",
         "-stats",             # una línea de stats por segundo
         "-loglevel", "error", # solo errores en stderr (stats van a stdout con -stats)

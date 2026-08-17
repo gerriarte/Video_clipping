@@ -2,8 +2,16 @@ import React from "react";
 import { Composition, staticFile } from "remotion";
 import { getVideoMetadata } from "@remotion/media-utils";
 import { ClipComposition, ClipCompositionProps } from "./ClipComposition";
-import { ColdOpen, COLD_OPEN_DURATION, COLD_OPEN_FPS } from "./ColdOpen";
-import { CierreOutro, CIERRE_DURATION, CIERRE_FPS } from "./CierreOutro";
+// Solo las medidas: ColdOpen y CierreOutro se cargan con `lazyComponent` más
+// abajo. Importarlos acá arrastraba sus tipografías de Google a CADA render de
+// clip — 200+ requests de red por render, para dos piezas que el pipeline de
+// clips no renderiza nunca (se arman a mano desde Remotion Studio).
+import {
+  COLD_OPEN_DURATION,
+  COLD_OPEN_FPS,
+  CIERRE_DURATION,
+  CIERRE_FPS,
+} from "./pieces.meta";
 
 // Este proyecto es SOLO el render de clips del pipeline (ver
 // config.REMOTION_DIR). Los episodios animados viven en episodios/ —
@@ -31,7 +39,7 @@ export const Root: React.FC = () => {
     <>
       <Composition
         id="ColdOpen"
-        component={ColdOpen}
+        lazyComponent={() => import("./ColdOpen")}
         durationInFrames={COLD_OPEN_DURATION}
         fps={COLD_OPEN_FPS}
         width={1920}
@@ -40,7 +48,7 @@ export const Root: React.FC = () => {
 
       <Composition
         id="CierreOutro"
-        component={CierreOutro}
+        lazyComponent={() => import("./CierreOutro")}
         durationInFrames={CIERRE_DURATION}
         fps={CIERRE_FPS}
         width={1920}

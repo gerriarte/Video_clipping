@@ -14,6 +14,7 @@ Las funciones que deciden son puras (reciben la lista de silencios): la única q
 toca el disco es `detect_silences`.
 """
 
+import json
 import re
 import subprocess
 
@@ -39,7 +40,116 @@ JUMPCUT_MIN_PIECE = 0.40
 
 # Normalización de sonoridad al estándar de las redes (TikTok/IG/YouTube rondan
 # los -14 LUFS). Sin esto cada episodio sale con un volumen distinto.
-LOUDNORM_FILTER = "loudnorm=I=-14:TP=-1.5:LRA=11"
+LOUDNORM_BASE = "loudnorm=I=-14:TP=-1.5:LRA=11"
+
+# Compatibilidad: se conserva el nombre viejo (una pasada, sin remuestreo).
+LOUDNORM_FILTER = LOUDNORM_BASE
+
+# Retumbe de sala, golpes de mesa y ruido de manejo viven por debajo de la voz:
+# un hombre grave arranca en ~85 Hz. Cortar en 80 limpia sin tocar el timbre, y
+# de paso el codificador deja de gastar bits en algo que nadie escucha.
+SPEECH_FILTER = "highpass=f=80"
+
+# `loudnorm` trabaja internamente a 192 kHz y DEJA su salida ahí. Como el
+# codificador AAC tope es 96 kHz, los clips terminaban a 96 kHz partiendo de una
+# fuente de 44.1: bitrate gastado en una banda que está vacía. 48 kHz es el
+# estándar de video y le devuelve esos bits a la voz.
+OUTPUT_RATE = 48000
+
+
+def loudnorm_filter(measured: dict | None = None) -> str:
+    """
+    Cadena de normalización, de dos pasadas si viene `measured`.
+
+    En una sola pasada `loudnorm` va corrigiendo sobre la marcha y no llega al
+    objetivo: medido sobre cinco clips del mismo episodio con objetivo -14 daba
+    -14.65, -14.98, -15.54, -16.14 y -16.08 — siempre bajo y con 1.5 dB de
+    diferencia entre clips, que es lo que se nota al ver varios seguidos.
+    Pasándole la medición previa aplica una ganancia lineal y da en el número.
+    """
+    f = LOUDNORM_BASE
+    if measured:
+        f += (
+            f":measured_I={measured['input_i']}"
+            f":measured_TP={measured['input_tp']}"
+            f":measured_LRA={measured['input_lra']}"
+            f":measured_thresh={measured['input_thresh']}"
+            f":offset={measured['target_offset']}"
+            ":linear=true"
+        )
+    return f"{f},aresample={OUTPUT_RATE}"
+
+
+def measure_loudness(video_path, audio_filter: str, extra_args: list | None = None) -> dict | None:
+    """
+    Primera pasada: mide el audio que va a salir y devuelve los valores que
+    `loudnorm_filter` necesita para la segunda.
+
+    `audio_filter` es la cadena que produce ese audio (los mismos recortes y
+    empalmes que el clip final): medir otra cosa daría una corrección errada.
+
+    Devuelve None si algo falla — quien llama cae a una sola pasada, que es lo
+    que había antes. Nunca debe tumbar un corte por no poder medir.
+    """
+    cmd = ["ffmpeg", "-hide_banner", "-nostats"]
+    cmd += list(extra_args or [])
+    cmd += ["-i", str(video_path), "-vn",
+            "-af", f"{audio_filter},{LOUDNORM_BASE}:print_format=json",
+            "-f", "null", "-"]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace")
+    except Exception:
+        return None
+    return parse_loudnorm_json(r.stderr or "")
+
+
+def measure_loudness_complex(video_path, chain: str, extra_args: list | None = None) -> dict | None:
+    """
+    Igual que `measure_loudness` pero para el caso con jump cuts.
+
+    Ahí el audio se arma con un `filter_complex` (varios `atrim` empalmados) y
+    `-af` no sirve, porque no acepta grafos con etiquetas. `chain` es lo que
+    devuelve `build_audio_chain` y termina en `[aout]`.
+    """
+    cmd = ["ffmpeg", "-hide_banner", "-nostats"]
+    cmd += list(extra_args or [])
+    cmd += [
+        "-i", str(video_path), "-vn",
+        "-filter_complex", f"{chain};[aout]{LOUDNORM_BASE}:print_format=json[m]",
+        "-map", "[m]", "-f", "null", "-",
+    ]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace")
+    except Exception:
+        return None
+    return parse_loudnorm_json(r.stderr or "")
+
+
+def parse_loudnorm_json(stderr: str) -> dict | None:
+    """
+    Saca el bloque JSON que imprime `loudnorm` al final de su salida.
+
+    Se busca la ÚLTIMA llave de apertura porque ffmpeg escribe otras cosas antes
+    y el JSON siempre va al final. Si falta alguna clave se devuelve None: media
+    medición es peor que ninguna (produciría una corrección equivocada).
+    """
+    i = stderr.rfind("{")
+    j = stderr.rfind("}")
+    if i == -1 or j == -1 or j < i:
+        return None
+    try:
+        data = json.loads(stderr[i:j + 1])
+    except ValueError:
+        return None
+    claves = ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset")
+    if not all(k in data for k in claves):
+        return None
+    # `inf`/`-inf` aparecen cuando el tramo es silencio: no se puede corregir.
+    if any("inf" in str(data[k]).lower() for k in claves):
+        return None
+    return data
 
 
 def detect_silences(

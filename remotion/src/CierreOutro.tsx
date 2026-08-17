@@ -12,9 +12,13 @@ import { loadFont as loadInter } from "@remotion/google-fonts/Inter";
 const { fontFamily: inter } = loadInter();
 
 /** Escena de cierre: 8 s = 240 frames a 30 fps. Sin audio: la música y la voz
- *  en off se montan aparte. Todo el dibujo es CSS, sin imágenes externas. */
-export const CIERRE_DURATION = 240;
-export const CIERRE_FPS = 30;
+ *  en off se montan aparte. Todo el dibujo es CSS, sin imágenes externas.
+ *
+ *  Las medidas viven en pieces.meta.ts para que Root.tsx pueda registrar esta
+ *  composición sin importar este archivo (que carga tipografías de Google). Se
+ *  re-exportan para no romper a quien las venía tomando de acá. */
+export { CIERRE_DURATION, CIERRE_FPS } from "./pieces.meta";
+import { CIERRE_DURATION } from "./pieces.meta";
 
 // ── Sincronización con la voz en off ─────────────────────────────────────────
 // Estos son los únicos valores a tocar cuando llegue el audio final: cada uno
@@ -200,3 +204,7 @@ export const CierreOutro: React.FC = () => {
     </AbsoluteFill>
   );
 };
+
+// Export por defecto: Root.tsx lo carga con `lazyComponent`, que espera un
+// módulo con `default` (ver pieces.meta.ts para el porqué de la carga diferida).
+export default CierreOutro;

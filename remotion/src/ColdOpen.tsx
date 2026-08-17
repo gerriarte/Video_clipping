@@ -19,9 +19,13 @@ const { fontFamily: inter } = loadInter();
 const { fontFamily: mono } = loadMono();
 
 /** Escena de apertura: 3.5 s = 105 frames a 30 fps. Sin audio: la música y la
- *  voz se montan después. Todo el dibujo es CSS/SVG, sin imágenes externas. */
-export const COLD_OPEN_DURATION = 105;
-export const COLD_OPEN_FPS = 30;
+ *  voz se montan después. Todo el dibujo es CSS/SVG, sin imágenes externas.
+ *
+ *  Las medidas viven en pieces.meta.ts para que Root.tsx pueda registrar esta
+ *  composición sin importar este archivo (que carga tipografías de Google). Se
+ *  re-exportan para no romper a quien las venía tomando de acá. */
+export { COLD_OPEN_DURATION, COLD_OPEN_FPS } from "./pieces.meta";
+import { COLD_OPEN_DURATION } from "./pieces.meta";
 
 /** Límites de cada beat, en frames. El beat 2 arranca antes de que termine el 1:
  *  el push-in de la planilla se encadena con el zoom sin corte. */
@@ -874,3 +878,7 @@ export const ColdOpen: React.FC = () => (
     </Sequence>
   </AbsoluteFill>
 );
+
+// Export por defecto: Root.tsx lo carga con `lazyComponent`, que espera un
+// módulo con `default` (ver pieces.meta.ts para el porqué de la carga diferida).
+export default ColdOpen;
