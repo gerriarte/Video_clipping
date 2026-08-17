@@ -72,7 +72,20 @@ TARGET_CLIPS       = 10     # Cantidad de clips a extraer por video
 # Default 9:16 (se conserva para consumidores que no eligen formato explícito).
 OUTPUT_WIDTH       = 1080
 OUTPUT_HEIGHT      = 1920   # 9:16
-OUTPUT_FPS         = 30
+OUTPUT_FPS         = 30     # fallback: solo se usa si no se puede leer el de la fuente
+
+# Los fps de salida siguen a los de la fuente. Estaba fijo en 30 y dos tercios
+# de los episodios del canal están grabados a 60: se tiraba uno de cada dos
+# frames, que en un talking head se nota en las manos y en los gestos.
+#
+# Seguir a la fuente y no forzar 60 es a propósito: en un episodio de 30 fps,
+# renderizar a 60 solo duplicaría frames idénticos — el doble de tiempo y de
+# peso, sin una sola imagen nueva.
+MATCH_SOURCE_FPS   = True
+
+# Techo. Protege de un archivo raro (o de frame rate variable, donde ffprobe
+# puede devolver valores absurdos) que dispararía el tiempo de render.
+MAX_OUTPUT_FPS     = 60
 OUTPUT_CRF         = 18     # calidad del archivo FINAL (menor = mejor; 18 ≈ visualmente sin pérdida)
 
 # Calidad del render intermedio de Remotion. Es un archivo temporal que después

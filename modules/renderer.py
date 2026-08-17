@@ -166,6 +166,52 @@ def clip_aspect(clip_path) -> float:
     return 16.0 / 9.0
 
 
+def clip_fps(clip_path) -> float | None:
+    """
+    Fotogramas por segundo reales del clip (None si no se pueden leer).
+
+    Se prefiere `avg_frame_rate` sobre `r_frame_rate`: en archivos de frame rate
+    variable el segundo devuelve la base de tiempo (a veces 1000) y no el ritmo
+    real. Ambos vienen como fracción ("60/1", "30000/1001").
+    """
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=avg_frame_rate,r_frame_rate",
+             "-of", "json", str(clip_path)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        s = json.loads(r.stdout)["streams"][0]
+    except Exception:
+        return None
+
+    for clave in ("avg_frame_rate", "r_frame_rate"):
+        valor = s.get(clave) or ""
+        try:
+            num, den = valor.split("/")
+            fps = float(num) / float(den)
+        except (ValueError, ZeroDivisionError):
+            continue
+        if fps > 0:
+            return fps
+    return None
+
+
+def output_fps(clip_path) -> int:
+    """
+    Fps con los que se renderiza este clip: los de la fuente, redondeados.
+
+    El redondeo absorbe los ritmos NTSC (29.97 → 30, 59.94 → 60), que es lo que
+    quiere Remotion. Si no se puede leer nada, se cae al valor de config.
+    """
+    if not config.MATCH_SOURCE_FPS:
+        return config.OUTPUT_FPS
+    fps = clip_fps(clip_path)
+    if not fps:
+        return config.OUTPUT_FPS
+    return max(1, min(config.MAX_OUTPUT_FPS, int(round(fps))))
+
+
 def _source_aspect(frame_path) -> float:
     """Aspecto (ancho/alto) de la fuente, leído de una muestra del análisis."""
     try:
@@ -236,6 +282,7 @@ def render_clip(
     manual_crops: list | None = None,
     layout_segments: list | None = None,
     source_aspect: float | None = None,
+    fps: int | None = None,
     concurrency: int | None = None,
 ) -> Path:
     """
@@ -262,7 +309,7 @@ def render_clip(
         "title":     clip_title,
         "width":     width,
         "height":    height,
-        "fps":       config.OUTPUT_FPS,
+        "fps":       fps or config.OUTPUT_FPS,
         "layout":    layout,
         "focusX":    focus_x,
         "focusKeyframes": focus_keyframes or [],
@@ -290,7 +337,7 @@ def render_clip(
             f"--props={props_file}",
             "--width",  str(width),
             "--height", str(height),
-            "--fps",    str(config.OUTPUT_FPS),
+            "--fps",    str(fps or config.OUTPUT_FPS),
             # Render intermedio: lo vuelve a tocar el arte final, así que se
             # guarda con más calidad que la del archivo de salida.
             "--crf",    str(config.RENDER_CRF),
@@ -329,6 +376,7 @@ def render_cover(
     manual_crops: list | None = None,
     layout_segments: list | None = None,
     source_aspect: float | None = None,
+    fps: int | None = None,
 ) -> Path:
     """
     Genera la portada (JPG) renderizando UN frame del clip con la misma composición
@@ -345,7 +393,7 @@ def render_cover(
         "title":     "",
         "width":     width,
         "height":    height,
-        "fps":       config.OUTPUT_FPS,
+        "fps":       fps or config.OUTPUT_FPS,
         "layout":    layout,
         "focusX":    focus_x,
         "focusKeyframes": focus_keyframes or [],
@@ -405,16 +453,19 @@ def _render_one(clip: dict, output_dir: Path, clip_url: str,
     clip_duration = clip.get("clip_duration")
     if not clip_duration:
         clip_duration = clip["end"] - clip["start"]
-    duration_frames = math.ceil(clip_duration * config.OUTPUT_FPS)
+
+    # Aspecto y fps se leen una vez y se reusan en el video, en la portada y en
+    # el seguimiento de la toma: si cada uno los resolviera por su cuenta, la
+    # portada podría quedar encuadrada distinto que el clip.
+    src_aspect = clip_aspect(clip["clip_path"])
+    fps        = output_fps(clip["clip_path"])
+
+    duration_frames = math.ceil(clip_duration * fps)
 
     # Formato elegido por clip → dimensiones + cómo encuadrar.
     fmt_key = _format_key(clip.get("formato"))
     preset  = config.FORMAT_PRESETS[fmt_key]
     width, height = preset["width"], preset["height"]
-
-    # Se lee una vez y se reusa en el video y en la portada, para que la portada
-    # no pueda quedar encuadrada distinto que el clip.
-    src_aspect = clip_aspect(clip["clip_path"])
 
     enc = _resolve_encuadre(clip["clip_path"], clip_duration, fmt_key, preset, clip)
     layout       = enc["layout"]
@@ -433,7 +484,7 @@ def _render_one(clip: dict, output_dir: Path, clip_url: str,
     if clip.get("follow_shot") and not manual_crops and config.crops(fmt_key):
         try:
             layout_segments = follow_shot_segments(
-                clip["clip_path"], clip_duration, width, height, config.OUTPUT_FPS
+                clip["clip_path"], clip_duration, width, height, fps
             )
         except Exception as e:
             _log(f"     ⚠️  No se pudo seguir la toma ({e}); layout fijo.")
@@ -443,7 +494,7 @@ def _render_one(clip: dict, output_dir: Path, clip_url: str,
             )
             enc["badge"] = f"🔀 sigue la toma ({len(layout_segments)} tramos: {kinds})"
 
-    _log(f"  🎬 {title} — {preset['label']} · {enc['badge']}")
+    _log(f"  🎬 {title} — {preset['label']} · {fps} fps · {enc['badge']}")
 
     # Remotion escribe un crudo y el arte final produce el archivo definitivo.
     # El crudo va al lado del destino (mismo disco) para que no haya que copiar
@@ -466,6 +517,7 @@ def _render_one(clip: dict, output_dir: Path, clip_url: str,
         manual_crops=manual_crops,
         layout_segments=layout_segments,
         source_aspect=src_aspect,
+        fps=fps,
         concurrency=concurrency,
     )
 
@@ -486,7 +538,7 @@ def _render_one(clip: dict, output_dir: Path, clip_url: str,
 
     # Portada: mejor frame con cara (o punto medio), mismo recorte, sin texto.
     cover_path  = output_dir / f"{name} - portada.jpg"
-    cover_frame = int(round(cover_time * config.OUTPUT_FPS))
+    cover_frame = int(round(cover_time * fps))
     cover_frame = max(0, min(cover_frame, max(0, duration_frames - 1)))
     try:
         render_cover(
@@ -504,6 +556,7 @@ def _render_one(clip: dict, output_dir: Path, clip_url: str,
             manual_crops=manual_crops,
             layout_segments=layout_segments,
             source_aspect=src_aspect,
+            fps=fps,
         )
     except Exception as e:
         _log(f"     ⚠️  No se pudo generar la portada: {e}")
