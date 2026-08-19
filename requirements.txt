@@ -1,6 +1,10 @@
 
 anthropic>=0.40.0
-yt-dlp>=2024.0.0
+# YouTube rota cada tanto el cifrado de las URLs de googlevideo, y una yt-dlp
+# vieja deja de firmarlas: los subtítulos bajan pero el stream de video corta
+# con 403 Forbidden. El piso es la versión verificada funcionando; si vuelve a
+# aparecer el 403, la solución es `pip install -U yt-dlp` y subir esta cota.
+yt-dlp>=2026.7.4
 # curl_cffi habilita la "impersonation" de navegador en yt-dlp; sin ella YouTube
 # devuelve 403 en el stream de video en muchas redes/IPs. La cota <0.15 es porque
 # yt-dlp solo soporta 0.10.x–0.14.x (la 0.15 rompe el backend).
