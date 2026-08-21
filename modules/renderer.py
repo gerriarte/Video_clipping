@@ -54,6 +54,16 @@ def _format_key(val) -> str:
     return config.DEFAULT_FORMAT
 
 
+def speaker_follow(clip: dict | None) -> bool:
+    """
+    Si el recorte de ESTE clip sigue al hablante (la "cámara" que se desplaza
+    dentro del clip). Los clips guardados antes de que existiera el control no
+    tienen la clave: para ellos vale el default del proyecto.
+    """
+    val = (clip or {}).get("speaker_follow")
+    return config.SPEAKER_FOLLOW_DEFAULT if val is None else bool(val)
+
+
 def _resolve_encuadre(clip_path: Path, clip_duration: float, fmt_key: str,
                       preset: dict, clip: dict | None = None) -> dict:
     """
@@ -113,12 +123,20 @@ def _resolve_encuadre(clip_path: Path, clip_duration: float, fmt_key: str,
         # cara grande; ahora eso se elige a mano con el formato "9:16 completo".
         if layout == "fit" and preset.get("allow_fit") is False:
             layout = "fill"
-        if layout == "fill" and len(kf) > 1:
+        # Seguir al hablante es OPCIONAL y se elige por clip. Apagado, el recorte
+        # queda clavado en focus_x (la posición mediana de la cara a lo largo del
+        # clip): un plano fijo bien encuadrado en vez de uno que se mueve solo.
+        follow = speaker_follow(clip)
+        if not follow:
+            kf = []
+        if layout != "fill":
+            badge = "🖥 plano completo (fondo borroso)"
+        elif len(kf) > 1:
             badge = f"🎯 sigue al hablante ({len(kf)} kf)"
-        elif layout == "fill":
+        elif follow:
             badge = "📐 recorte al hablante"
         else:
-            badge = "🖥 plano completo (fondo borroso)"
+            badge = "📌 recorte fijo al hablante (sin seguimiento)"
         base.update(
             layout=layout, focus_x=det["focus_x"],
             focus_keyframes=kf, cover_time=det.get("cover_time", base["cover_time"]),
@@ -226,14 +244,62 @@ def _source_aspect(frame_path) -> float:
     return 16.0 / 9.0
 
 
+def _focus_at(keyframes: list, t: float) -> float:
+    """
+    Valor de la trayectoria de foco en el segundo `t`. Interpolación lineal
+    entre keyframes con clamp en los extremos: el mismo cálculo que hace
+    `focusAt` en el componente de Remotion.
+    """
+    if not keyframes:
+        return 0.5
+    if t <= keyframes[0]["t"]:
+        return float(keyframes[0]["x"])
+    for a, b in zip(keyframes, keyframes[1:]):
+        if t <= b["t"]:
+            span = b["t"] - a["t"]
+            if span <= 0:
+                return float(b["x"])
+            f = (t - a["t"]) / span
+            return float(a["x"]) + (float(b["x"]) - float(a["x"])) * f
+    return float(keyframes[-1]["x"])
+
+
+def _slice_keyframes(keyframes: list, t0: float, t1: float) -> list:
+    """
+    Trozo de la trayectoria de foco que cae dentro del tramo [t0, t1), en tiempo
+    del clip (el mismo reloj que usa el componente, así no hay que reajustar
+    nada del lado de Remotion).
+
+    Los bordes se interpolan en vez de recortarse a secas: si no, el tramo
+    arrancaría en el keyframe anterior al corte y la cámara pegaría un salto al
+    entrar. Devuelve [] si adentro del tramo la cámara no se mueve — ahí un
+    foco fijo hace lo mismo con menos props.
+    """
+    if not keyframes or t1 <= t0:
+        return []
+    inner = [{"t": round(float(k["t"]), 3), "x": round(float(k["x"]), 3)}
+             for k in keyframes if t0 < float(k["t"]) < t1]
+    out = ([{"t": round(t0, 3), "x": round(_focus_at(keyframes, t0), 3)}]
+           + inner
+           + [{"t": round(t1, 3), "x": round(_focus_at(keyframes, t1), 3)}])
+    xs = {k["x"] for k in out}
+    return out if len(xs) > 1 else []
+
+
 def follow_shot_segments(clip_path, clip_duration: float, width: int, height: int,
-                         fps: int) -> list | None:
+                         fps: int, focus_keyframes: list | None = None) -> list | None:
     """
     Tramos de layout para "seguir la toma": split mientras están los dos,
     recorte cerrado cuando la cámara va a uno solo.
 
     Se analiza el ARCHIVO DE CLIP (no el tramo del original) porque después del
     ajuste de bordes y de los jump cuts los tiempos ya no coinciden.
+
+    `focus_keyframes` es la trayectoria de la cámara que sigue al hablante (la
+    del clip entero, ya resuelta por detect_layout). Se reparte entre los tramos
+    de recorte cerrado para que seguir la toma SUME el seguimiento en vez de
+    reemplazarlo por un plano fijo. En los tramos "split" no aplica: ahí cada
+    mitad tiene su propio foco.
 
     Devuelve None si el clip no cambia de plano: ahí un layout fijo es mejor
     (menos trabajo y sin riesgo de parpadeo).
@@ -259,6 +325,9 @@ def follow_shot_segments(clip_path, clip_duration: float, width: int, height: in
         else:
             item["layout"] = "fill"
             item["focusX"] = round(_face_x_to_object_position(s["xs"][0], full_r), 3)
+            kf = _slice_keyframes(focus_keyframes or [], s["start"], s["end"])
+            if kf:
+                item["focusKeyframes"] = kf
         out.append(item)
 
     # El primero tiene que arrancar en 0 sí o sí (el componente busca hacia atrás).
@@ -482,17 +551,29 @@ def _render_one(clip: dict, output_dir: Path, clip_url: str,
     # Solo tiene sentido en formatos que recortan: 16:9 y "9:16 completo"
     # muestran el plano entero, no hay toma que seguir.
     if clip.get("follow_shot") and not manual_crops and config.crops(fmt_key):
+        fallo = False
         try:
             layout_segments = follow_shot_segments(
-                clip["clip_path"], clip_duration, width, height, fps
+                clip["clip_path"], clip_duration, width, height, fps,
+                focus_keyframes=keyframes,
             )
         except Exception as e:
+            fallo = True
             _log(f"     ⚠️  No se pudo seguir la toma ({e}); layout fijo.")
         if layout_segments:
             kinds = "→".join(
                 "⧉" if s["layout"] == "split" else "📱" for s in layout_segments
             )
-            enc["badge"] = f"🔀 sigue la toma ({len(layout_segments)} tramos: {kinds})"
+            con_kf = sum(1 for s in layout_segments if s.get("focusKeyframes"))
+            extra = f" · {con_kf} con seguimiento" if con_kf else ""
+            enc["badge"] = (
+                f"🔀 sigue la toma ({len(layout_segments)} tramos: {kinds}{extra})"
+            )
+        elif not fallo:
+            # Sin este aviso el toggle parecía no hacer nada: el clip sale igual
+            # que con el layout fijo y el badge no lo delataba.
+            _log("     ℹ️  Seguir la toma: este clip no cambia de plano; "
+                 "queda el encuadre fijo.")
 
     _log(f"  🎬 {title} — {preset['label']} · {fps} fps · {enc['badge']}")
 

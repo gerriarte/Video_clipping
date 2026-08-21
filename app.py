@@ -47,7 +47,7 @@ try:
     from modules.downloader  import download_video, load_local_video
     from modules.analyzer    import parse_vtt, identify_clips, get_cues_for_clip, transcript_coverage
     from modules.clipper     import cut_clips
-    from modules.renderer    import render_clips
+    from modules.renderer    import render_clips, speaker_follow
     from modules.caption_gen import generate_all_captions
     from modules.transcriber import transcribe_video
     from modules.postiz      import PostizClient, build_posts_for_clip, maybe_upload_cover, to_utc_iso, PLATFORM_CAPTION_FIELD
@@ -546,15 +546,28 @@ def framing_controls(clip: dict) -> None:
     )
     clip["crop_manual"] = manual
     if not manual:
-        # Sin encuadre manual, la otra opción es que el recorte siga la toma.
-        # Con encuadre manual no se ofrece: sería contradictorio (y en el render
-        # gana el manual, que es la decisión explícita del usuario).
+        # Sin encuadre manual hay dos decisiones, independientes entre sí: si la
+        # cámara sigue al hablante y si el recorte sigue la toma. Con encuadre
+        # manual no se ofrecen: sería contradictorio (y en el render gana el
+        # manual, que es la decisión explícita del usuario).
+        if config.FORMAT_PRESETS[fmt].get("auto_layout"):
+            sfollow = st.checkbox(
+                "🎥 Seguir al hablante (la cámara se mueve dentro del clip)",
+                value=speaker_follow(clip),
+                key=f"spkfollow_{idx}",
+                help="Encendido, el recorte se desplaza para acompañar a quien "
+                     "habla. Apagado, queda fijo en la posición media de la cara: "
+                     "un plano quieto en vez de una cámara que panea.",
+            )
+            if sfollow != speaker_follow(clip):
+                clip["speaker_follow"] = sfollow
         follow = st.checkbox(
             "🔀 Seguir la toma (cambiar el recorte cuando cambia el plano)",
             value=bool(clip.get("follow_shot")),
             key=f"followf_{idx}",
             help="Split mientras están los dos en cuadro y recorte cerrado cuando "
-                 "la cámara va a uno solo, dentro del mismo clip.",
+                 "la cámara va a uno solo, dentro del mismo clip. Se combina con "
+                 "el seguimiento del hablante: no lo reemplaza.",
         )
         clip["follow_shot"] = follow
         return
@@ -665,9 +678,10 @@ def framing_panel(clipped: list) -> None:
     st.markdown("**Encuadre**")
     st.caption(
         "Para **9:16** y **1:1** elegís a qué persona recortar cuando hay más "
-        "de una. Para **split**, quién va arriba y quién abajo. Si no activás "
-        "nada, el recorte es automático (sigue al que habla) — o podés dejar "
-        "que **siga la toma** y cambie de recorte cuando cambia el plano."
+        "de una. Para **split**, quién va arriba y quién abajo. Sin encuadre "
+        "manual el recorte es automático: **sigue al hablante** (se puede "
+        "apagar para dejar el plano quieto) y, si lo activás, además **sigue la "
+        "toma** y cambia de recorte cuando cambia el plano."
     )
     framing_controls(clip)
     save_state()
@@ -1361,13 +1375,28 @@ if st.session_state.stage == "analyzed":
                     # Seguir la toma: solo tiene sentido si el formato recorta
                     # (16:9 y "9:16 completo" muestran el plano entero).
                     if config.crops(normalize_format(_clip.get("formato"))):
+                        if config.FORMAT_PRESETS[
+                            normalize_format(_clip.get("formato"))
+                        ].get("auto_layout"):
+                            _sfollow = st.checkbox(
+                                "🎥 Seguir al hablante",
+                                value=speaker_follow(_clip),
+                                key=f"spkfollow_{_pos}_{st.session_state.clips_editor_rev}",
+                                help="El recorte se desplaza para acompañar a quien "
+                                     "habla. Apagado, el plano queda quieto en la "
+                                     "posición media de la cara.",
+                            )
+                            if _sfollow != speaker_follow(_clip):
+                                _clip["speaker_follow"] = _sfollow
+                                save_state()
                         _follow = st.checkbox(
                             "🔀 Seguir la toma",
                             value=bool(_clip.get("follow_shot")),
                             key=f"follow_{_pos}_{st.session_state.clips_editor_rev}",
                             help="El recorte cambia dentro del clip: split mientras "
                                  "están los dos en cuadro y recorte cerrado cuando la "
-                                 "cámara va a uno solo. Las dimensiones no cambian.",
+                                 "cámara va a uno solo. Las dimensiones no cambian. "
+                                 "Se combina con el seguimiento del hablante.",
                         )
                         if _follow != bool(_clip.get("follow_shot")):
                             _clip["follow_shot"] = _follow

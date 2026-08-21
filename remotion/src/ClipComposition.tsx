@@ -64,6 +64,11 @@ export interface LayoutSegment {
   focusX?:      number;
   focusTop?:    number;
   focusBottom?: number;
+  /** Trayectoria de la cámara DENTRO de este tramo (tiempo del clip, igual que
+   *  `focusKeyframes` global). Con esto, seguir la toma no apaga el seguimiento
+   *  del hablante: lo mantiene adentro de cada plano cerrado. Si falta, el
+   *  tramo usa `focusX` fijo. */
+  focusKeyframes?: FocusKeyframe[];
 }
 
 export interface CropRect {
@@ -374,7 +379,10 @@ export const ClipComposition: React.FC<ClipCompositionProps> = ({
         <ClipVisual
           src={clipPath}
           layout={seg.layout}
-          posX={seg.focusX ?? focusX}
+          // El tramo manda: si trae su propia trayectoria, la cámara sigue al
+          // hablante adentro del plano; si no, foco fijo (los tramos "split"
+          // nunca traen: ahí cada mitad ya tiene su propio foco).
+          posX={focusAt(frame / fps, seg.focusKeyframes ?? [], seg.focusX ?? focusX)}
           focusTop={seg.focusTop ?? focusTop}
           focusBottom={seg.focusBottom ?? focusBottom}
           canvasAspect={canvasAspect}

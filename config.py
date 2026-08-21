@@ -132,6 +132,12 @@ FORMAT_PRESETS = {
 }
 DEFAULT_FORMAT = "9:16"
 
+# ¿El recorte sigue al hablante (la "cámara" que se desplaza dentro del clip)
+# cuando el clip no dice nada al respecto? Es solo el valor inicial del control
+# de la UI y el que se aplica a los clips guardados antes de que ese control
+# existiera; cada clip puede prenderlo o apagarlo por su cuenta.
+SPEAKER_FOLLOW_DEFAULT = os.environ.get("SPEAKER_FOLLOW_DEFAULT", "1") not in ("0", "false", "False")
+
 
 def crops(fmt_key: str) -> bool:
     """Si el formato recorta (y por lo tanto se puede encuadrar a mano)."""
