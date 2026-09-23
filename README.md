@@ -102,6 +102,13 @@ cd Video_clipping
 
 Copiá el archivo de ejemplo y completá tu clave:
 
+**Lo más simple: no hagas nada acá.** La primera vez que abrís la app te recibe
+una pantalla de configuración donde ponés los datos de tu canal y la API key. La
+key se guarda en `.env` (que ya está en `.gitignore`) y los datos del canal en
+`settings.json`. Después se cambia todo desde **⚙ Ajustes**, en la barra lateral.
+
+Si preferís dejarlo listo antes de abrirla:
+
 ```bash
 # Linux / macOS
 cp .env.example .env
@@ -115,7 +122,7 @@ Abrí `.env` y reemplazá el valor:
 ANTHROPIC_API_KEY=sk-ant-api03-TU_CLAVE_AQUI
 ```
 
-Alternativamente podés setear la variable de entorno directamente:
+O seteá la variable de entorno directamente:
 ```bash
 # Linux / macOS
 export ANTHROPIC_API_KEY=sk-ant-api03-TU_CLAVE_AQUI
@@ -123,6 +130,9 @@ export ANTHROPIC_API_KEY=sk-ant-api03-TU_CLAVE_AQUI
 # Windows (PowerShell)
 $env:ANTHROPIC_API_KEY = "sk-ant-api03-TU_CLAVE_AQUI"
 ```
+
+Sin key, la app abre igual: te lleva a la pantalla de configuración. También
+podés elegir **Ollama** ahí y trabajar sin ninguna key.
 
 ### 3. Instalar dependencias Python
 
@@ -307,8 +317,10 @@ output/       # Clips renderizados en 9:16 por Remotion
 
 ## Troubleshooting
 
-**"Falta ANTHROPIC_API_KEY"**  
-Verificá que el archivo `.env` existe en la raíz del proyecto y contiene tu clave correctamente.
+**"Falta la API key de Anthropic"**  
+Ponela en **⚙ Ajustes** dentro de la app, o verificá que `.env` existe en la raíz
+del proyecto y contiene `ANTHROPIC_API_KEY`. Los scripts de línea de comandos
+(`pipeline.py`) no tienen esa pantalla y fallan al arrancar si falta.
 
 **Remotion falla con `[WinError 2]`**  
 En Windows, `npx` no es un ejecutable directo. El proyecto ya lo maneja usando `npx.cmd` automáticamente, pero asegurate de tener Node.js instalado y en el PATH.

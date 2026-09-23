@@ -145,6 +145,8 @@ def _serie_parte(clip: dict) -> tuple[str, str]:
 # ── CLI ────────────────────────────────────────────────────────────────────────
 
 def main():
+    # Sin UI donde configurar nada: si falta la key, que se sepa ya.
+    config.require_llm()
     parser = argparse.ArgumentParser(
         description="Zumo Streaming — Pipeline de clips virales desde YouTube"
     )

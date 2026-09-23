@@ -55,6 +55,10 @@ try:
     from modules.proxy       import ensure_proxy, proxy_path_for
     from modules.media_server import MediaServer
     from modules.segment_preview import analyze_segment
+    from modules.settings   import (
+        load_settings, save_settings, settings_exist,
+        env_read, env_upsert, mask_key,
+    )
     from modules.ui_state    import (
         normalize_format, gallery_formats,
         clips_to_gallery, apply_gallery,
@@ -774,93 +778,261 @@ def _list_ollama_models() -> list:
         return []
 
 
-# ── Sidebar: configuración del canal ─────────────────────────────────────────
+# ── Identidad visual ──────────────────────────────────────────────────────────
+# La paleta vive en .streamlit/config.toml, y desde ahí llega también a los
+# componentes React (leen el tema del host). Acá va solo lo que el tema no
+# alcanza a decir: densidad, tipografía y el encabezado.
+
+ACCENT = "#FFD000"
+
+st.markdown(
+    """
+    <style>
+      /* Streamlit deja ~6rem de aire arriba; en una herramienta que se usa
+         scrolleando, eso es media pantalla perdida en cada recarga. */
+      .stMainBlockContainer { padding-top: 2.2rem; padding-bottom: 4rem; }
+
+      /* Los títulos de sección venían con tamaño de landing page. */
+      .stMainBlockContainer h3 { font-size: 1.15rem; letter-spacing: -.01em; }
+
+      /* Botones: una sola altura en toda la app. Streamlit los deja crecer
+         según el texto y las filas quedan desparejas. */
+      .stButton button, .stDownloadButton button {
+        min-height: 2.35rem; border-radius: 8px; font-weight: 500;
+      }
+
+      /* Encabezado propio. */
+      .zumo-head { display:flex; align-items:baseline; gap:.6rem; margin-bottom:1.1rem; }
+      .zumo-head b { font-size:1.45rem; font-weight:700; letter-spacing:-.02em; }
+      .zumo-head span { font-size:.82rem; opacity:.55; }
+      .zumo-head i { width:9px; height:9px; border-radius:2px; background:ACCENT_COLOR;
+                     display:inline-block; transform:translateY(-2px); }
+
+      /* Los pasos: dónde estás, sin gastar una pantalla en decirlo. */
+      .zumo-steps { display:flex; gap:0; margin:0 0 1.4rem; font-size:.78rem; }
+      .zumo-steps div { flex:1; padding:.42rem .6rem; border-top:2px solid rgba(255,255,255,.10);
+                        color:rgba(255,255,255,.38); }
+      .zumo-steps div.done { border-top-color:rgba(255,255,255,.28); color:rgba(255,255,255,.55); }
+      .zumo-steps div.now  { border-top-color:ACCENT_COLOR; color:ACCENT_COLOR; font-weight:600; }
+      .zumo-steps b { display:block; font-weight:inherit; }
+    </style>
+    """.replace("ACCENT_COLOR", ACCENT),
+    unsafe_allow_html=True,
+)
+
+_STEP_LABELS = ["Fuente", "Clips", "Corte", "Render", "Publicar"]
+_STEP_OF_STAGE = {"idle": 0, "downloaded": 1, "editing": 1, "analyzed": 2,
+                  "clipped": 3, "captioned": 4}
+
+
+def header(stage: str) -> None:
+    """Nombre de la app y en qué paso está, en dos líneas."""
+    actual = _STEP_OF_STAGE.get(stage, 0)
+    pasos = "".join(
+        f'<div class="{"now" if i == actual else "done" if i < actual else ""}">'
+        f"<b>{i + 1}. {label}</b></div>"
+        for i, label in enumerate(_STEP_LABELS)
+    )
+    canal = st.session_state.get("ch_name") or "Sin canal configurado"
+    st.markdown(
+        f'<div class="zumo-head"><i></i><b>Zumo · Clips</b><span>{canal}</span></div>'
+        f'<div class="zumo-steps">{pasos}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ── Pantalla de configuración ─────────────────────────────────────────────────
+# Es lo primero que se ve la primera vez. Antes, sin ANTHROPIC_API_KEY la app no
+# arrancaba: mostraba `set ANTHROPIC_API_KEY=...` y se detenía ahí. La key se
+# pone acá y va al .env (que ya está en .gitignore), nunca a settings.json ni al
+# estado del pipeline, que se copian y se comparten sin pensarlo.
+
+_CH_FIELDS = {
+    "ch_name":  "channel_name",
+    "ch_desc":  "channel_desc",
+    "ch_hosts": "channel_hosts",
+    "ch_tone":  "channel_tone",
+}
+
+
+def load_user_settings() -> None:
+    """Vuelca settings.json en la sesión. Lo guardado pisa a los defaults."""
+    data = load_settings()
+    for ss_key, file_key in _CH_FIELDS.items():
+        if data.get(file_key):
+            st.session_state[ss_key] = data[file_key]
+    config.apply_settings(data)
+
+
+def setup_screen() -> None:
+    """Configuración del canal y del modelo. Dibuja y corta el script acá."""
+    header(st.session_state.stage)
+
+    primera_vez = not settings_exist()
+    if primera_vez:
+        st.subheader("Configurá tu canal")
+        st.caption(
+            "Se pregunta una sola vez. Esta información es la que recibe el "
+            "modelo para elegir los clips y escribir los textos: cuanto más "
+            "concreta, mejor salen."
+        )
+    else:
+        st.subheader("Ajustes")
+
+    # Los widgets NO se atan a ch_* directamente: Streamlit purga de session_state
+    # las claves ligadas a un widget en cuanto ese widget deja de dibujarse, así
+    # que al salir de Ajustes los datos del canal desaparecían — y con ellos el
+    # contexto que recibe el modelo. Los campos usan claves propias y vuelcan
+    # sobre las plantas al guardar. Es el mismo problema que el de `source_mode`.
+    nombre = st.text_input(
+        "Nombre del canal", value=st.session_state.get("ch_name", ""),
+        key="setup_ch_name", placeholder="Ej: Zumo Streaming",
+    )
+    desc = st.text_area(
+        "¿De qué trata? ¿Para quién?", value=st.session_state.get("ch_desc", ""),
+        key="setup_ch_desc", height=80, placeholder="Canal sobre… orientado a…",
+    )
+    hosts = st.text_area(
+        "Quiénes aparecen (uno por línea — Nombre: Rol)",
+        value=st.session_state.get("ch_hosts", ""),
+        key="setup_ch_hosts", height=110,
+        placeholder="Ana García: Conductora\nJuan López: Editor y co-host",
+    )
+    tono = st.text_input(
+        "Tono", value=st.session_state.get("ch_tone", ""),
+        key="setup_ch_tone",
+        placeholder="Ej: Relajado pero profesional, con insights accionables",
+    )
+
+    st.divider()
+    st.markdown("**¿Con qué modelo trabajás?**")
+
+    prov = st.radio(
+        "Proveedor",
+        options=["anthropic", "ollama"],
+        format_func=lambda k: (
+            "Claude — mejor calidad, se paga por uso"
+            if k == "anthropic" else
+            "Ollama — corre en esta máquina, gratis y privado, más lento"
+        ),
+        index=0 if config.LLM_PROVIDER != "ollama" else 1,
+        key="setup_provider",
+        label_visibility="collapsed",
+    )
+
+    key_nueva = ""
+    if prov == "anthropic":
+        guardada = env_read("ANTHROPIC_API_KEY")
+        key_nueva = st.text_input(
+            "API key de Anthropic",
+            type="password",
+            key="setup_api_key",
+            placeholder=(
+                f"Ya hay una guardada ({mask_key(guardada)}) — dejalo vacío para conservarla"
+                if guardada else "sk-ant-…"
+            ),
+            help="Se guarda en el archivo .env de esta carpeta, que no se sube a git. "
+                 "Se saca de console.anthropic.com.",
+        )
+        st.text_input("Modelo", key="setup_claude_model", value=config.CLAUDE_MODEL)
+    else:
+        modelos = _list_ollama_models()
+        if modelos:
+            st.selectbox(
+                "Modelo local", options=modelos, key="setup_ollama_model",
+                index=modelos.index(config.OLLAMA_MODEL) if config.OLLAMA_MODEL in modelos else 0,
+            )
+        else:
+            st.text_input("Modelo local", key="setup_ollama_model", value=config.OLLAMA_MODEL)
+            st.caption("Ollama no responde. ¿Está corriendo `ollama serve`? "
+                       "Los modelos se bajan con `ollama pull qwen2.5:14b`.")
+
+    st.divider()
+
+    falta_key = (
+        prov == "anthropic"
+        and not key_nueva.strip()
+        and not env_read("ANTHROPIC_API_KEY")
+    )
+    if falta_key:
+        st.info("Sin la API key, Claude no puede analizar el video. "
+                "También podés elegir Ollama y trabajar sin key.")
+
+    col_ok, col_cancel, _ = st.columns([1.4, 1, 3])
+    if col_ok.button("Guardar y empezar" if primera_vez else "Guardar",
+                     type="primary", disabled=falta_key, use_container_width=True):
+        if key_nueva.strip():
+            # Al .env y solo al .env. Y a os.environ, para que valga ya mismo.
+            env_upsert("ANTHROPIC_API_KEY", key_nueva.strip())
+            os.environ["ANTHROPIC_API_KEY"] = key_nueva.strip()
+
+        st.session_state.ch_name  = nombre
+        st.session_state.ch_desc  = desc
+        st.session_state.ch_hosts = hosts
+        st.session_state.ch_tone  = tono
+
+        datos = {
+            "channel_name":  nombre,
+            "channel_desc":  desc,
+            "channel_hosts": hosts,
+            "channel_tone":  tono,
+            "llm_provider":  prov,
+            "claude_model":  st.session_state.get("setup_claude_model") or config.CLAUDE_MODEL,
+            "ollama_model":  st.session_state.get("setup_ollama_model") or config.OLLAMA_MODEL,
+        }
+        save_settings(datos)
+        config.apply_settings(datos)
+        st.session_state.show_settings = False
+        st.rerun()
+
+    if not primera_vez and col_cancel.button("Cancelar", use_container_width=True):
+        st.session_state.show_settings = False
+        load_user_settings()  # descartar lo tipeado
+        st.rerun()
+
+    st.stop()
+
+# Lo guardado en settings.json pisa a los defaults, una vez por sesión.
+if "_settings_loaded" not in st.session_state:
+    load_user_settings()
+    st.session_state["_settings_loaded"] = True
+
+
+# ── Sidebar ───────────────────────────────────────────────────────────────────
+# Antes vivía acá toda la configuración del canal: cuatro campos que se llenan
+# una vez, ocupando 245 px de ancho en todas las pantallas para siempre. Ahora
+# está en Ajustes y la barra dice lo único que cambia seguido.
+
+def motor_label() -> str:
+    if config.LLM_PROVIDER == "ollama":
+        return f"Local · {config.OLLAMA_MODEL}"
+    return f"Claude · {config.CLAUDE_MODEL}"
+
 
 with st.sidebar:
-    st.header("Canal")
-
-    st.text_input(
-        "Nombre del canal",
-        key="ch_name",
-        placeholder="Ej: Mi Canal de Cocina",
-    )
-    st.text_area(
-        "Descripción / temática",
-        key="ch_desc",
-        height=90,
-        placeholder="Canal de YouTube sobre... orientado a...",
-    )
-    st.text_area(
-        "Hosts (uno por línea — Nombre: Rol)",
-        key="ch_hosts",
-        height=120,
-        placeholder="Ana García: Conductora principal\nJuan López: Editor y co-host",
-    )
-    st.text_input(
-        "Tono",
-        key="ch_tone",
-        placeholder="Ej: Educativo y cercano, con humor ocasional",
-    )
-
-    st.caption("Esta info guía al modelo al analizar el video y generar los captions.")
-
-    # ── Motor de IA (proveedor + modelo) ──────────────────────────────────────
-    if CONFIG_OK:
+    st.markdown(f"**{st.session_state.get('ch_name') or 'Sin canal'}**")
+    st.caption(motor_label())
+    if st.button("⚙ Ajustes", use_container_width=True, key="open_settings"):
+        st.session_state.show_settings = True
+        st.rerun()
+    if st.session_state.stage != "idle":
         st.divider()
-        st.header("Motor de IA")
+        if st.button("↺ Empezar de nuevo", use_container_width=True, key="reset_side"):
+            reset()
+            st.rerun()
 
-        _prov_labels = {"anthropic": "Anthropic (nube)", "ollama": "Ollama (local)"}
-        _prov_keys   = list(_prov_labels.keys())
-        _cur_prov    = config.LLM_PROVIDER if config.LLM_PROVIDER in _prov_keys else "anthropic"
-
-        _sel_prov = st.radio(
-            "Proveedor",
-            options=_prov_keys,
-            format_func=lambda k: _prov_labels[k],
-            index=_prov_keys.index(_cur_prov),
-            key="llm_provider_sel",
-            help="Anthropic = mejor calidad (requiere API key). Ollama = local, gratis y privado.",
-        )
-        config.LLM_PROVIDER = _sel_prov
-
-        if _sel_prov == "ollama":
-            models = _list_ollama_models()
-            if models:
-                _idx = models.index(config.OLLAMA_MODEL) if config.OLLAMA_MODEL in models else 0
-                config.OLLAMA_MODEL = st.selectbox(
-                    "Modelo local", options=models, index=_idx, key="ollama_model_sel"
-                )
-            else:
-                config.OLLAMA_MODEL = st.text_input(
-                    "Modelo local (Ollama no responde — escribí el nombre)",
-                    value=config.OLLAMA_MODEL, key="ollama_model_txt",
-                )
-                st.caption("¿Está corriendo `ollama serve`? Bajá modelos con `ollama pull qwen2.5:14b`.")
-            st.caption(f"🖥 Local · {config.OLLAMA_MODEL} — sin costo, más lento que la nube.")
-        else:
-            st.caption(f"☁ {config.CLAUDE_MODEL}")
-
-
-# ── Layout principal ──────────────────────────────────────────────────────────
-
-st.title("🎬 Fast Video Clipping")
 
 if not CONFIG_OK:
     st.error(f"Falta configuración: {CONFIG_ERROR}")
-    st.code("set ANTHROPIC_API_KEY=sk-ant-...")
     st.stop()
 
-# Barra de progreso
-STAGES = ["idle", "downloaded", "analyzed", "clipped", "captioned"]
-LABELS = ["—", "1· Descargado", "2· Analizado", "3· Clips cortados", "4· Captions listos"]
-# "editing" es un sub-modo (editor de timeline) que vive entre descargar y cortar;
-# a efectos de la barra de progreso lo tratamos como "descargado".
-stage_idx = STAGES.index(st.session_state.stage) if st.session_state.stage in STAGES else 1
-st.progress(
-    stage_idx / (len(STAGES) - 1),
-    text=LABELS[stage_idx] if stage_idx > 0 else "Pegá una URL o elegí un archivo local para empezar",
-)
-st.divider()
+# Primera vez, o cuando el usuario abre Ajustes: la pantalla de configuración
+# reemplaza a todo lo demás (hace st.stop()).
+if not settings_exist() or st.session_state.get("show_settings"):
+    setup_screen()
+
+header(st.session_state.stage)
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -883,23 +1055,24 @@ if st.session_state.stage == "idle":
 
 _is_youtube = st.session_state.source_mode == "youtube"
 
-col_input, col_btn, col_rst = st.columns([5, 1.5, 1])
+# La fila de entrada solo existe antes de cargar nada: antes quedaba arriba
+# para siempre, deshabilitada y con una ruta de ejemplo adentro.
+if st.session_state.stage == "idle":
+    col_input, col_btn = st.columns([6, 1.5])
 
-with col_input:
-    _placeholder = (
-        "https://youtube.com/watch?v=..."
-        if _is_youtube else
-        r"C:\Videos\mi_video.mp4"
-    )
-    _input_val = st.text_input(
-        "Entrada",
-        placeholder=_placeholder,
-        disabled=st.session_state.stage != "idle",
-        label_visibility="collapsed",
-    )
+    with col_input:
+        _placeholder = (
+            "https://youtube.com/watch?v=..."
+            if _is_youtube else
+            r"C:\Videos\mi_video.mp4"
+        )
+        _input_val = st.text_input(
+            "Entrada",
+            placeholder=_placeholder,
+            label_visibility="collapsed",
+        )
 
-with col_btn:
-    if st.session_state.stage == "idle":
+    with col_btn:
         _btn_label = "▶ Descargar" if _is_youtube else "📂 Cargar"
         if st.button(_btn_label, type="primary", use_container_width=True):
             _val = _input_val.strip().strip('"').strip("'")
@@ -956,14 +1129,9 @@ with col_btn:
                         s.update(label="❌ Error al cargar", state="error")
                         st.session_state["_last_error"] = str(e)
 
+
 if st.session_state.get("_last_error"):
     st.error(st.session_state.pop("_last_error"))
-
-with col_rst:
-    if st.session_state.stage != "idle":
-        if st.button("↺ Reset", use_container_width=True):
-            reset()
-            st.rerun()
 
 # Info del video (una vez descargado)
 if st.session_state.video_info:

@@ -1,0 +1,25 @@
+# Tema de la app.
+#
+# El acento es el mismo amarillo que la pieza de cierre de Remotion
+# (`CierreOutro.tsx`: ACCENT = "#FFD000"), así la herramienta y los videos que
+# salen de ella hablan el mismo idioma.
+#
+# El fondo NO es el marrón cálido del ColdOpen a propósito: acá se mira material
+# para decidir encuadres y colorimetría, y un fondo tibio te tiñe la percepción
+# de lo que estás juzgando. Neutro y oscuro es lo correcto para eso.
+
+[theme]
+base = "dark"
+primaryColor = "#FFD000"
+backgroundColor = "#101216"
+secondaryBackgroundColor = "#191C22"
+textColor = "#ECEDEF"
+font = "sans serif"
+
+[client]
+# Es una herramienta local: el botón "Deploy" y el menú de Streamlit Cloud solo
+# ocupan lugar arriba a la derecha.
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false

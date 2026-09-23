@@ -161,12 +161,48 @@ El contenido mezcla conversación fluida con insights accionables para emprended
 # Solo es obligatoria si el proveedor activo es Anthropic. Con Ollama (local) no
 # hace falta ninguna key.
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-if LLM_PROVIDER == "anthropic" and not ANTHROPIC_API_KEY:
-    raise EnvironmentError(
-        "Falta ANTHROPIC_API_KEY (proveedor activo: anthropic). "
-        "Ejecutá: set ANTHROPIC_API_KEY=tu_key  (o agregala al .env), "
-        "o cambiá a local con LLM_PROVIDER=ollama."
-    )
+
+
+def llm_missing() -> str | None:
+    """
+    Qué falta para poder usar el proveedor activo. None si está listo.
+
+    Antes esto era un `raise` acá mismo, al importar: sin key la app no podía
+    ni arrancar, y lo único que ofrecía era un mensaje pidiendo que editaras el
+    .env a mano. Ahora la app abre igual y te lleva a la pantalla de
+    configuración, que es donde se pone la key. El uso real igual está
+    protegido: `modules/llm.py` no llama a la API sin key.
+    """
+    if LLM_PROVIDER == "anthropic" and not ANTHROPIC_API_KEY:
+        return "Falta la API key de Anthropic."
+    return None
+
+
+def require_llm() -> None:
+    """Falla temprano. La usan los scripts de línea de comandos, que no tienen UI."""
+    falta = llm_missing()
+    if falta:
+        raise EnvironmentError(
+            falta + " Configurala en la app (⚙ Ajustes), agregala al .env como "
+            "ANTHROPIC_API_KEY, o cambiá a local con LLM_PROVIDER=ollama."
+        )
+
+
+def apply_settings(data: dict) -> None:
+    """
+    Aplica la configuración del usuario a este proceso, ya corriendo.
+
+    Los módulos leen `config.X` cada vez que trabajan, así que reasignar acá
+    alcanza y no hace falta reiniciar la app.
+    """
+    global LLM_PROVIDER, CLAUDE_MODEL, OLLAMA_MODEL, ANTHROPIC_API_KEY
+    if data.get("llm_provider") in ("anthropic", "ollama"):
+        LLM_PROVIDER = data["llm_provider"]
+    if data.get("claude_model"):
+        CLAUDE_MODEL = data["claude_model"]
+    if data.get("ollama_model"):
+        OLLAMA_MODEL = data["ollama_model"]
+    ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", ANTHROPIC_API_KEY)
 
 # ── Postiz (programación de publicaciones) ────────────────────────────────────
 # Self-hosted: la base termina en /api/public/v1. Cloud sería https://api.postiz.com/public/v1

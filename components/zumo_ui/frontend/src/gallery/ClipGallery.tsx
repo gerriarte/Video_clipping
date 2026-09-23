@@ -304,7 +304,7 @@ const Btn: React.FC<{
       font: "inherit", fontSize: 12, cursor: "pointer", whiteSpace: "nowrap",
       padding: "5px 10px", borderRadius: 7, lineHeight: 1.3,
       background: active ? t.primary : accent ? "rgba(232,163,61,0.14)" : "transparent",
-      color: active ? "#fff" : accent ? t.warn : t.sub,
+      color: active ? t.onPrimary : accent ? t.warn : t.sub,
       border: `1px solid ${active ? t.primary : accent ? "rgba(232,163,61,0.45)" : t.border}`,
     }}
   >

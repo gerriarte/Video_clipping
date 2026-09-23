@@ -397,7 +397,7 @@ da más material para elegir en el editor. Cambio chico, encaja en el Track 2.
 
 ---
 
-## Track 4 — La UI en React, pantalla por pantalla   ✅ FASES 1, 2 y 3 (2026-09-23)
+## Track 4 — La UI en React, pantalla por pantalla   ✅ FASES 1 a 4 (2026-09-23)
 
 > Decisión: la UI se mueve a React **por pantalla**, empezando por la que más
 > dolía. El componente se escribe contra una interfaz de props/callbacks y toda
@@ -553,6 +553,64 @@ pedo), que los captions editados se guarden y que no se borren las plataformas
 que no vinieron en el patch. Se verificó que tienen dientes: inyectando el bug
 viejo (que `apply_publish` no escriba `clip["captions"]`), 2 tests fallan.
 
+### Fase 4 — Tema propio y pantalla de configuración   ✅ (2026-09-23)
+
+**El tema** vive en `.streamlit/config.toml`. El acento es `#FFD000`, el mismo
+amarillo de la pieza de cierre de Remotion (`CierreOutro.tsx`), así la
+herramienta y los videos que salen de ella hablan el mismo idioma. El fondo **no**
+es el marrón cálido del ColdOpen a propósito: acá se mira material para decidir
+encuadres y colorimetría, y un fondo tibio tiñe la percepción de lo que estás
+juzgando.
+
+El tema llega gratis a las pantallas React: leen `theme` del host. Pero eso
+destapó algo — el texto sobre el acento estaba hardcodeado en blanco, que con el
+rojo de Streamlit se leía y con el amarillo da **1,7:1**. Ahora `theme.ts`
+calcula el color por luminancia (`readableOn`): medido en el navegador, el chip
+de formato activo quedó en **12,3:1**.
+
+Además, un `<style>` chico para lo que el tema no alcanza: el aire de arriba
+(Streamlit deja ~6 rem, media pantalla perdida en cada recarga), una sola altura
+de botón, y el encabezado con los 5 pasos. La barra de progreso azul y el
+`st.title` con emoji se fueron.
+
+**La pantalla de configuración.** Antes, sin `ANTHROPIC_API_KEY` la app no
+arrancaba: `config.py` hacía `raise` al importarse y lo único que ofrecía era un
+mensaje pidiendo editar el `.env` a mano. Ahora:
+
+- `config.py` no revienta al importar. `llm_missing()` dice qué falta y
+  `require_llm()` (que sí levanta) la usan los scripts de línea de comandos, que
+  no tienen dónde configurar nada. El uso real siempre estuvo protegido:
+  `modules/llm.py` no llama a la API sin key.
+- La primera vez que abrís la app te recibe la configuración: datos del canal y
+  con qué modelo trabajás. Después se vuelve desde **⚙ Ajustes**.
+- **Dónde va cada cosa:** la API key al `.env` y solo ahí (ya estaba en
+  `.gitignore`, y es de donde `config.py` lee al arrancar). Los datos del canal a
+  `settings.json`. `save_settings` **levanta una excepción** si alguien le pasa
+  una key: `settings.json` y `.pipeline_state.json` se copian y se comparten sin
+  pensarlo. En pantalla la key se muestra enmascarada (`sk-ant-…4f2a`): alcanza
+  para reconocer cuál está puesta sin dejarla legible en una captura.
+- `env_upsert` reemplaza la línea y deja el resto intacto. Reescribir el archivo
+  entero se llevaría puestos los comentarios y `POSTIZ_API_KEY`.
+
+**El bug que apareció probándolo:** los campos del canal usaban `key="ch_name"`
+y compañía. Streamlit **purga de `session_state` las claves ligadas a un widget
+en cuanto ese widget deja de dibujarse**, así que al salir de Ajustes los datos
+del canal desaparecían — y con ellos el contexto que recibe el modelo para
+elegir clips y escribir captions. Los campos ahora usan claves propias
+(`setup_ch_*`) y vuelcan sobre las plantas al guardar. Es exactamente la misma
+trampa que ya estaba documentada para `source_mode`, y vale como regla: **en esta
+app, un dato que tiene que sobrevivir a que su pantalla se cierre no puede usar
+la clave del widget.**
+
+`tests/test_settings.py`: 17 tests. Que el `.env` no se rompa (clave parecida,
+línea comentada, valor con un salto de línea que partiría el archivo en dos
+variables), que `save_settings` rechace secretos, y que la máscara no filtre.
+
+**De paso:** la fila de entrada (URL / archivo local) solo se dibuja en el paso
+1. Antes quedaba arriba para siempre, deshabilitada y con `C:\Videos\mi_video.mp4`
+adentro. El Reset se fue a la barra lateral, que ahora dice el canal y el modelo
+en vez de los cuatro campos de configuración que ocupaban 245 px para siempre.
+
 ### La estructura del frontend
 
 Un solo proyecto de frontend y un solo build; `screen` elige la pantalla.
@@ -579,12 +637,9 @@ cosas sin pelearse con nada.
 
 ### Lo que queda para las fases siguientes
 
-- **Pasos 1 y 2** son formularios cortos; no urge. El único cambio que valdría
-  es la entrada: hoy un archivo local se escribe a mano (`C:\Videos\...`) en vez
-  de arrastrarlo o elegirlo de `episodios/*/_entrada/`.
-- **El tema visual de Streamlit** sigue sin tocar: no hay `.streamlit/config.toml`
-  ni una línea de CSS. Lo que queda de Streamlit (títulos, barra de progreso,
-  sidebar, Paso 6) se ve con el default.
+- **La entrada de un archivo local** sigue escribiéndose a mano: falta poder
+  arrastrarlo o elegirlo de `episodios/*/_entrada/`.
+- **El Paso 6 (Postiz)** es el único que quedó con la forma vieja.
 - **El detector de caras no ve este set.** En el episodio de prueba los 30 tramos
   dan "sin caras el 100%" y la sugerencia sale `9:16-full` para todos, con caras
   clarísimas en las fotos. Es el Haar de `segment_preview` contra el fondo verde
@@ -611,3 +666,4 @@ cosas sin pelearse con nada.
 | 2026-09-23 | La UI se mueve a React por pantalla. Empieza la galería de clips (Paso 3); el componente se escribe contra props/callbacks con el bridge de Streamlit aislado, para poder mudarlo a una API sin reescribirlo. |
 | 2026-09-23 | Un solo proyecto de frontend y un solo build para todas las pantallas; `screen` elige cuál montar. Un proyecto npm por componente no funciona (resolución de módulos), y varias entradas HTML tampoco (rutas de assets). |
 | 2026-09-23 | La traducción clips ↔ pantallas sale de `app.py` a `modules/ui_state.py` con tests: es donde un bug hace perder ediciones sin avisar. |
+| 2026-09-23 | La API key se pone desde la app y va al `.env`, nunca a `settings.json` ni al estado. `config.py` deja de reventar al importar: sin key la app abre y te lleva a configurarla. |

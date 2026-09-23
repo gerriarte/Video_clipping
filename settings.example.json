@@ -1,0 +1,9 @@
+{
+  "channel_name": "Mi Canal",
+  "channel_desc": "Canal sobre… orientado a…",
+  "channel_hosts": "Ana García: Conductora\nJuan López: Editor y co-host",
+  "channel_tone": "Relajado pero profesional, con insights accionables",
+  "llm_provider": "anthropic",
+  "claude_model": "claude-sonnet-4-6",
+  "ollama_model": "qwen2.5:14b"
+}

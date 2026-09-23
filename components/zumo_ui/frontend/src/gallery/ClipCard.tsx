@@ -98,7 +98,8 @@ export const ClipCard: React.FC<CardProps> = ({
                   borderRadius: 6, cursor: "pointer", display: "grid", placeItems: "center",
                   background: clip.selected ? t.primary : "rgba(6,8,12,0.66)",
                   border: `1px solid ${clip.selected ? t.primary : "rgba(255,255,255,0.28)"}`,
-                  color: "#fff", fontSize: 13, lineHeight: 1, padding: 0,
+                  color: clip.selected ? t.onPrimary : "#fff",
+                  fontSize: 13, lineHeight: 1, padding: 0,
                 }}
               >
                 {clip.selected ? "✓" : ""}
@@ -198,11 +199,11 @@ export const ClipCard: React.FC<CardProps> = ({
                   whiteSpace: "nowrap", height: 26,
                   font: "inherit", fontWeight: active ? 600 : 400,
                   background: active ? t.primary : "transparent",
-                  color: active ? "#fff" : t.sub,
+                  color: active ? t.onPrimary : t.sub,
                   border: `1px solid ${active ? t.primary : t.border}`,
                 }}
               >
-                <FormatGlyph fmt={f} color={active ? "#fff" : t.sub} />
+                <FormatGlyph fmt={f} color={active ? t.onPrimary : t.sub} />
                 {f.short}
                 {star && <span style={{ color: t.warn, fontWeight: 700 }}>{"★"}</span>}
               </button>
@@ -297,7 +298,8 @@ const Toggle: React.FC<{ on: boolean; label: string; title: string; t: Tokens; o
       <span
         style={{
           position: "absolute", top: 2, left: on ? 13 : 2, width: 9, height: 9,
-          borderRadius: "50%", background: "#fff", transition: "left .15s",
+          borderRadius: "50%", background: on ? t.onPrimary : "#fff",
+          transition: "left .15s",
         }}
       />
     </span>

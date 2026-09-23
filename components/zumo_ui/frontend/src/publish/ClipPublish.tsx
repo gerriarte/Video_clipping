@@ -11,7 +11,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { PublishArgs, PublishClip, PublishValue } from "./types";
 import type { Theme } from "../types";
 import { FormatGlyph } from "../Crop";
-import { clock, tokens, type Tokens } from "../theme";
+import { clock, readableOn, tokens, type Tokens } from "../theme";
 
 export interface PublishProps {
   args: PublishArgs;
@@ -294,11 +294,11 @@ export const ClipPublish: React.FC<PublishProps> = ({ args, theme, onCommit, onH
                       padding: "4px 7px", borderRadius: 7, fontSize: 11, lineHeight: 1, height: 26,
                       font: "inherit", fontWeight: active ? 600 : 400, whiteSpace: "nowrap",
                       background: active ? t.primary : "transparent",
-                      color: active ? "#fff" : t.sub,
+                      color: active ? t.onPrimary : t.sub,
                       border: `1px solid ${active ? t.primary : t.border}`,
                     }}
                   >
-                    <FormatGlyph fmt={f} color={active ? "#fff" : t.sub} />
+                    <FormatGlyph fmt={f} color={active ? t.onPrimary : t.sub} />
                     {f.short}
                   </button>
                 );
@@ -381,7 +381,7 @@ const Copiar: React.FC<{
         font: "inherit", fontSize: 11, cursor: "pointer", padding: "3px 9px",
         borderRadius: 6, whiteSpace: "nowrap",
         background: color || "transparent",
-        color: color ? "#fff" : t.sub,
+        color: color ? readableOn(color) : t.sub,
         border: `1px solid ${color || t.border}`,
       }}
     >

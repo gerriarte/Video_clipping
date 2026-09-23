@@ -1,5 +1,7 @@
 # Secrets
 .env
+# La configuración del usuario (canal + qué modelo usa). El .example sí se versiona.
+settings.json
 
 # Pipeline runtime state
 .pipeline_state.json
