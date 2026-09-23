@@ -137,3 +137,36 @@ def test_describe_resume_lo_prendido():
     texto = describe(_clip(overlays={"hook": {"on": True},
                                      "lower": {"on": True, "name": "Ger"}}))
     assert "gancho" in texto and "Ger" in texto
+
+
+# ── Dos capas en el mismo lugar ───────────────────────────────────────────────
+
+def test_avisa_si_el_gancho_abajo_se_pisa_con_la_placa():
+    from modules.overlays import collision
+    aviso = collision(_clip(overlays={
+        "hook":  {"on": True, "position": "bottom", "start": 1.0, "dur": 5.0},
+        "lower": {"on": True, "name": "Ger", "start": 3.0, "dur": 4.0},
+    }))
+    assert aviso and "3.0" in aviso and "6.0" in aviso
+
+
+def test_no_avisa_si_no_coinciden_en_el_tiempo():
+    from modules.overlays import collision
+    assert collision(_clip(overlays={
+        "hook":  {"on": True, "position": "bottom", "start": 0.0, "dur": 2.0},
+        "lower": {"on": True, "name": "Ger", "start": 3.0, "dur": 4.0},
+    })) is None
+
+
+def test_no_avisa_con_el_gancho_arriba():
+    from modules.overlays import collision
+    assert collision(_clip(overlays={
+        "hook":  {"on": True, "position": "top", "start": 1.0, "dur": 9.0},
+        "lower": {"on": True, "name": "Ger", "start": 3.0, "dur": 4.0},
+    })) is None
+
+
+def test_no_avisa_con_una_sola_capa():
+    from modules.overlays import collision
+    assert collision(_clip(overlays={"hook": {"on": True, "position": "bottom"}})) is None
+    assert collision(_clip()) is None

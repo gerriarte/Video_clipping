@@ -47,7 +47,10 @@ try:
     from modules.downloader  import download_video, load_local_video
     from modules.analyzer    import parse_vtt, identify_clips, get_cues_for_clip, transcript_coverage
     from modules.clipper     import cut_clips
-    from modules.renderer    import render_clips, speaker_follow, clip_aspect
+    from modules.renderer    import (
+        render_clips, speaker_follow, clip_aspect,
+        preview_encuadre, overlay_preview,
+    )
     from modules.caption_gen import generate_all_captions
     from modules.transcriber import transcribe_video
     from modules.peaks       import compute_peaks
@@ -58,6 +61,7 @@ try:
     from modules.imaging    import imread
     from modules.overlays   import (
         normalize as normalize_overlays, parse_hosts, describe as describe_overlays,
+        for_render as overlays_for_render, collision as overlays_collision,
     )
     from modules.settings   import (
         load_settings, save_settings, settings_exist,
@@ -319,6 +323,100 @@ def segment_video_url(info: dict) -> str:
 
 
 
+# ── Preview de las capas ──────────────────────────────────────────────────────
+# Un frame del clip tal como va a salir, con las capas dibujadas. Es el mismo
+# `remotion still` y la misma composición que el render final, así que lo que se
+# ve acá es lo que va a salir.
+#
+# No se regenera solo al mover un control: el still tarda ~5 s y el encuadre
+# ~11 s la primera vez. Va con botón, y si después tocás algo el preview queda
+# marcado como viejo en vez de mentir.
+
+_PREVIEW_DIR = config.CLIPS_DIR / "_overlay_preview"
+
+
+def _encuadre_firma(clip: dict) -> str:
+    """Lo que cambia el encuadre. No incluye las capas: son independientes."""
+    partes = [str(clip.get("clip_path")), normalize_format(clip.get("formato")),
+              str(speaker_follow(clip)), str(bool(clip.get("follow_shot")))]
+    partes += [f"{k}={clip.get(k)}" for k in sorted(clip) if k.startswith("crop")]
+    return "|".join(partes)
+
+
+def _capas_firma(clip: dict) -> str:
+    return json.dumps(clip.get("overlays") or {}, sort_keys=True, ensure_ascii=False)
+
+
+def _preview_encuadre_cacheado(clip: dict) -> dict:
+    """El encuadre, resuelto una vez por clip (y de nuevo si cambia el formato)."""
+    key = f"_ovenc_{clip.get('index')}"
+    firma = _encuadre_firma(clip)
+    guardado = st.session_state.get(key)
+    if guardado and guardado[0] == firma:
+        return guardado[1]
+    enc = preview_encuadre(clip)
+    st.session_state[key] = (firma, enc)
+    return enc
+
+
+def overlay_preview_panel(clip: dict) -> None:
+    """Botón de preview + las imágenes generadas."""
+    capas = overlays_for_render(clip)
+    if not capas:
+        st.caption("Prendé una capa para poder previsualizarla.")
+        return
+
+    idx   = clip.get("index", 0)
+    key   = f"_ovprev_{idx}"
+    firma = _capas_firma(clip)
+    guardado = st.session_state.get(key)
+    viejo = bool(guardado) and guardado.get("firma") != firma
+
+    col_btn, col_aviso = st.columns([1.3, 3])
+    generar = col_btn.button(
+        "👁 Ver cómo queda" if not guardado else "↻ Actualizar preview",
+        key=f"ov_prev_btn_{idx}", use_container_width=True,
+    )
+    if viejo:
+        col_aviso.caption("⚠️ Cambiaste algo: este preview es de antes.")
+    elif not guardado:
+        col_aviso.caption("Tarda unos segundos: renderiza un frame de verdad.")
+
+    if generar:
+        try:
+            srv = get_preview_server()
+            url = srv.url_for(Path(clip["clip_path"]))
+            with st.spinner("Resolviendo el encuadre…"):
+                enc = _preview_encuadre_cacheado(clip)
+            imgs = []
+            momentos = []
+            if "hook" in capas:
+                h = capas["hook"]
+                momentos.append((h["start"] + h["dur"] / 2, "Gancho"))
+            if "lower" in capas:
+                l = capas["lower"]
+                momentos.append((l["start"] + l["dur"] / 2, "Placa"))
+            with st.spinner(f"Renderizando {len(momentos)} frame(s)…"):
+                for i, (seg, etiqueta) in enumerate(momentos):
+                    destino = _PREVIEW_DIR / f"{idx}_{i}.jpg"
+                    overlay_preview(clip, seg, destino, clip_url=url, enc=enc)
+                    imgs.append((str(destino), f"{etiqueta} · segundo {seg:.1f}"))
+            st.session_state[key] = {"firma": firma, "imgs": imgs}
+            _rerun_here()
+        except Exception as e:
+            st.error(f"No se pudo generar el preview: {e}")
+
+    guardado = st.session_state.get(key)
+    if guardado and guardado.get("imgs"):
+        # Cuatro columnas aunque haya dos imágenes: un 9:16 a todo el ancho de
+        # media pantalla es una torre de mil pixeles de alto y hay que scrollear
+        # para ver el pie.
+        cols = st.columns(4)
+        for col, (ruta, etiqueta) in zip(cols, guardado["imgs"]):
+            if Path(ruta).exists():
+                col.image(ruta, caption=etiqueta, width="stretch")
+
+
 # ── Capas encima del clip (gancho y placa de nombre) ──────────────────────────
 # Van como overlay: NO alargan el clip ni obligan a volver a cortar, solo
 # afectan al render. Por eso los controles viven acá, en el paso previo al
@@ -412,6 +510,13 @@ def overlay_controls(clip: dict) -> None:
         clip["overlays"] = capas
         save_state()
         _rerun_here()
+
+    choque = overlays_collision(clip)
+    if choque:
+        st.warning(choque)
+
+    st.divider()
+    overlay_preview_panel(clip)
 
 
 # ── Galería de clips (componente custom) ──────────────────────────────────────

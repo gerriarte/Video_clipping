@@ -141,6 +141,32 @@ def for_render(clip: dict) -> dict | None:
     return salida
 
 
+def collision(clip: dict) -> str | None:
+    """
+    Aviso si dos capas van a quedar una encima de la otra.
+
+    Pasa con el gancho puesto "abajo" y la placa de nombre: las dos se apoyan
+    justo arriba de la zona que tapa la interfaz de la app, así que si además
+    coinciden en el tiempo se pisan. Es barato avisarlo acá y carísimo
+    descubrirlo en el render.
+    """
+    capas = for_render(clip)
+    if not capas or "hook" not in capas or "lower" not in capas:
+        return None
+    if capas["hook"]["position"] != "bottom":
+        return None
+
+    h, l = capas["hook"], capas["lower"]
+    desde = max(h["start"], l["start"])
+    hasta = min(h["start"] + h["dur"], l["start"] + l["dur"])
+    if hasta <= desde:
+        return None
+    return (
+        f"El gancho abajo y la placa se pisan entre el segundo {desde:.1f} y el "
+        f"{hasta:.1f}. Movelo arriba, o corré uno de los dos en el tiempo."
+    )
+
+
 def describe(clip: dict) -> str:
     """Resumen de una línea para mostrar en la lista de clips."""
     capas = for_render(clip)

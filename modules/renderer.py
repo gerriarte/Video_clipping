@@ -514,6 +514,102 @@ def render_cover(
     return output_path
 
 
+def preview_encuadre(clip: dict) -> dict:
+    """
+    Resuelve cómo se va a encuadrar este clip, sin renderizar nada.
+
+    Se expone aparte porque **tarda ~11 s** (detecta caras sobre el archivo de
+    clip) y no depende de las capas: quien haga previews de las capas puede
+    resolverlo una vez y reusarlo mientras el usuario mueve los controles.
+    """
+    dur = clip.get("clip_duration") or (clip["end"] - clip["start"])
+    fmt_key = _format_key(clip.get("formato"))
+    preset  = config.FORMAT_PRESETS[fmt_key]
+    enc = _resolve_encuadre(clip["clip_path"], dur, fmt_key, preset, clip)
+    enc["_fmt_key"] = fmt_key
+    enc["_width"]   = preset["width"]
+    enc["_height"]  = preset["height"]
+    enc["_fps"]     = output_fps(clip["clip_path"])
+    enc["_aspect"]  = clip_aspect(clip["clip_path"])
+    enc["_dur"]     = dur
+    return enc
+
+
+def overlay_preview(
+    clip: dict,
+    at_second: float,
+    output_path: Path,
+    clip_url: str,
+    enc: dict | None = None,
+    scale: float = 0.5,
+) -> Path:
+    """
+    Un frame del clip tal como saldría renderizado, con sus capas encima.
+
+    Es el mismo `remotion still` que hace la portada y la misma composición que
+    el render final, así que lo que se ve acá es lo que va a salir. Se dibuja a
+    `scale` del tamaño real (todo en la composición es proporcional al ancho, así
+    que se ve igual, solo que más chico y mucho más rápido).
+
+    `clip_url` es obligatorio y tiene que ser HTTP: Chromium **bloquea** las
+    rutas `file://` ("Media load rejected by URL safety check"), igual que en el
+    render del clip y en el de la portada. Lo sirve quien llama.
+
+    `enc` viene de `preview_encuadre`. Si no se pasa, se resuelve acá — y eso
+    cuesta ~11 s, así que conviene pasarlo.
+    """
+    enc = enc or preview_encuadre(clip)
+    fps    = enc["_fps"]
+    width  = max(160, int(enc["_width"] * scale) // 2 * 2)   # par: lo pide el encoder
+    height = max(160, int(enc["_height"] * scale) // 2 * 2)
+
+    props = {
+        "clipPath":  clip_url,
+        "title":     clip.get("title", ""),
+        "width":     width,
+        "height":    height,
+        "fps":       fps,
+        "layout":    enc["layout"],
+        "focusX":    enc["focus_x"],
+        "focusKeyframes": enc["focus_keyframes"] or [],
+        "focusTop":    enc["focus_top"],
+        "focusBottom": enc["focus_bottom"],
+        "sourceAspect": enc["_aspect"],
+    }
+    if enc.get("manual_crops"):
+        props["manualCrops"] = enc["manual_crops"]
+    capas = overlays_for_render(clip)
+    if capas:
+        props["overlays"] = capas
+
+    # El frame se pide dentro del clip: pedir uno que no existe hace fallar el still.
+    frame = int(max(0.0, min(float(at_second), max(0.0, enc["_dur"] - 0.05))) * fps)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    props_file = Path(tempfile.mktemp(suffix=".json"))
+    props_file.write_text(json.dumps(props, ensure_ascii=False), encoding="utf-8")
+    try:
+        result = subprocess.run(
+            [
+                _NPX, "remotion", "still",
+                "src/index.ts", "ClipComposition",
+                str(output_path).replace("\\", "/"),
+                f"--props={props_file}",
+                "--frame", str(frame),
+                "--width", str(width), "--height", str(height),
+                "--image-format", "jpeg", "--jpeg-quality", "80",
+            ],
+            capture_output=True, text=True, encoding="utf-8",
+            cwd=str(config.REMOTION_DIR),
+        )
+    finally:
+        props_file.unlink(missing_ok=True)
+
+    if result.returncode != 0:
+        raise RuntimeError(f"Remotion still (preview) falló:\n{(result.stderr or '')[-1500:]}")
+    return output_path
+
+
 def _render_one(clip: dict, output_dir: Path, clip_url: str,
                 concurrency: int | None) -> dict:
     """Renderiza un clip + su portada. Pensado para correr en un worker del pool."""

@@ -339,7 +339,7 @@ components/clip_editor/
 
 ---
 
-## Track 3 — Animaciones (overlays con Remotion)   ✅ FASE 1 (2026-09-23)
+## Track 3 — Animaciones (overlays con Remotion)   ✅ FASES 1 y 2 (2026-09-23)
 
 Dos capas encima del clip, manejadas por parámetros (sin LLM): el **gancho** y
 la **placa de nombre**. Van como overlay y no como placas concatenadas, así que
@@ -388,6 +388,38 @@ La fuente se pide con pesos y subset explícitos (`loadFont("normal", {weights:
 ["700","900"], subsets: ["latin"]})`): sin argumentos son ~190 peticiones por
 render para usar dos. Es la misma trampa que ya había costado en `ColdOpen`.
 
+### Fase 2 — Ver las capas sin renderizar el clip   ✅ (2026-09-23)
+
+Un botón **"Ver cómo queda"** en la pestaña de capas genera un frame real: el
+mismo `remotion still` que hace la portada y **la misma composición** que el
+render final, así que lo que se ve ahí es lo que va a salir. Un still por capa
+prendida, en el medio de su ventana visible.
+
+**Por qué es un botón y no automático.** Medido: el still tarda **5,1 s**, y
+resolver el encuadre **11,5 s** (detecta caras sobre el archivo de clip).
+Regenerar en cada movimiento de un control sería insoportable. Entonces:
+
+- El encuadre se cachea por clip, con una firma que incluye formato, seguimiento
+  y encuadre manual — pero **no** las capas, que no lo afectan. Mover un control
+  de capas no vuelve a pagar los 11,5 s.
+- Si tocás algo después de generar, el preview queda marcado — *"⚠️ Cambiaste
+  algo: este preview es de antes"* — en vez de mentir mostrando lo viejo.
+- El still se dibuja a la mitad del tamaño. Todo en la composición es
+  proporcional al ancho, así que se ve igual, solo que más chico y más rápido.
+
+**Dos cosas que aparecieron al construirlo:**
+
+1. **Chromium bloquea `file://`.** El primer still falló con *"Media load
+   rejected by URL safety check"*. El render del clip y el de la portada ya
+   servían el archivo por HTTP por esta misma razón; `overlay_preview` pide
+   `clip_url` como obligatorio, y quien llama lo sirve (en la app, el mismo
+   MediaServer de las miniaturas).
+2. **El gancho "abajo" y la placa se pisan.** Los dos se apoyan justo arriba de
+   la zona que tapa la interfaz de la app, así que si además coinciden en el
+   tiempo quedan uno encima del otro. `overlays.collision()` lo detecta y la UI
+   lo avisa con los segundos exactos: *"se pisan entre el segundo 3.0 y el
+   6.0"*. Es barato avisarlo y carísimo descubrirlo en el render.
+
 ### Lo que NO está, y por qué
 
 **Intro / outro como placa.** Estaba en el plan y queda afuera de esta fase. Una
@@ -395,9 +427,6 @@ placa a pantalla completa en un clip de 60 s se come los segundos donde se
 decide la retención, que es justo lo que el gancho resuelve sin costar tiempo de
 pantalla. La cañería es la misma (`overlays/types.ts` + una capa más en
 `OverlayLayer`), así que agregarla después es barato si se la quiere igual.
-
-**Preview sin renderizar.** Hoy las capas se ven al renderizar. Un still de
-Remotion (un frame) daría el preview en la app; es el siguiente paso natural.
 
 ### Dónde vive cada cosa
 
