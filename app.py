@@ -55,6 +55,12 @@ try:
     from modules.proxy       import ensure_proxy, proxy_path_for
     from modules.media_server import MediaServer
     from modules.segment_preview import analyze_segment
+    from modules.ui_state    import (
+        normalize_format, gallery_formats,
+        clips_to_gallery, apply_gallery,
+        clips_to_publish, apply_publish,
+        FORMAT_LABELS, LABEL_TO_KEY, FORMAT_OPTIONS, PUBLISH_PLATFORMS,
+    )
     from components.clip_editor import clip_editor
     from components.zumo_ui     import clip_gallery, clip_publish
     CONFIG_OK    = True
@@ -232,11 +238,11 @@ def make_live_logger(placeholder):
 
 
 # ── Formatos por clip ─────────────────────────────────────────────────────────
-_FORMAT_LABELS  = {k: v["label"] for k, v in config.FORMAT_PRESETS.items()}
-_LABEL_TO_KEY   = {v: k for k, v in _FORMAT_LABELS.items()}
-_FORMAT_OPTIONS = list(_FORMAT_LABELS.values())
-# Valores viejos que pudieron quedar en el estado persistido.
-_LEGACY_FORMAT  = {"9:16 vertical": "9:16", "Original 16:9": "16:9"}
+# Las etiquetas y la normalización viven en modules/ui_state.py (con tests);
+# acá quedan solo los alias que usa la UI vieja y el badge, que es cosmético.
+_FORMAT_LABELS  = FORMAT_LABELS
+_LABEL_TO_KEY   = LABEL_TO_KEY
+_FORMAT_OPTIONS = FORMAT_OPTIONS
 _FORMAT_BADGE   = {
     "9:16":      "📱 9:16",
     "9:16-full": "📱⬛ 9:16 completo",
@@ -245,18 +251,6 @@ _FORMAT_BADGE   = {
     "split":     "⧉ split",
 }
 
-
-def normalize_format(val) -> str:
-    """Normaliza cualquier valor de formato (clave, label o legacy) a una clave."""
-    if not val:
-        return config.DEFAULT_FORMAT
-    if val in config.FORMAT_PRESETS:
-        return val
-    if val in _LEGACY_FORMAT:
-        return _LEGACY_FORMAT[val]
-    if val in _LABEL_TO_KEY:
-        return _LABEL_TO_KEY[val]
-    return config.DEFAULT_FORMAT
 
 
 def clips_to_df(clips: list) -> pd.DataFrame:
@@ -317,47 +311,10 @@ def segment_video_url(info: dict) -> str:
 
 
 
-def format_picker(clip: dict, key_prefix: str, suggested: str = "") -> None:
-    """
-    Botones de formato para un clip (el activo va resaltado). Rerun al cambiar.
-
-    Escribe en el dict del clip, así sirve igual antes de cortar (Paso 3) que
-    después (Pasos 4 y 5): el formato solo afecta al render, nunca al corte.
-    """
-    current = normalize_format(clip.get("formato"))
-    cols = st.columns(len(config.FORMAT_PRESETS))
-    for col, (key, preset) in zip(cols, config.FORMAT_PRESETS.items()):
-        label = _FORMAT_BADGE.get(key, preset["label"])
-        if key == suggested and key != current:
-            label += " ⭐"
-        clicked = col.button(
-            label,
-            key=f"{key_prefix}_{key}",
-            use_container_width=True,
-            type="primary" if key == current else "secondary",
-            help=preset["label"] + (" — sugerido" if key == suggested else ""),
-        )
-        if clicked and key != current:
-            clip["formato"] = key
-            # Que la tabla del Paso 3 se vuelva a sembrar con el valor nuevo.
-            st.session_state.clips_editor_rev += 1
-            save_state()
-            st.rerun()
-
-
 # ── Galería de clips (componente custom) ──────────────────────────────────────
 # Reemplaza a la planilla + el panel de previews: cada clip es una tarjeta con
 # la foto del tramo y el recorte del formato dibujado encima. Ver
 # components/clip_gallery/.
-
-# Nombre corto para el botón de la tarjeta (el largo va en el tooltip).
-_FORMAT_SHORT = {
-    "9:16":      "9:16",
-    "9:16-full": "completo",
-    "1:1":       "1:1",
-    "16:9":      "16:9",
-    "split":     "split",
-}
 
 
 def get_preview_server():
@@ -384,124 +341,8 @@ def source_aspect(info: dict) -> float:
     return st.session_state[key]
 
 
-def gallery_formats() -> list:
-    """Los formatos, con lo que la tarjeta necesita para dibujar el recorte."""
-    return [
-        {
-            "key":        k,
-            "label":      p["label"],
-            "short":      _FORMAT_SHORT.get(k, p["label"]),
-            "crop":       bool(p.get("crop")),
-            "aspect":     p["width"] / p["height"],
-            "autoLayout": bool(p.get("auto_layout")),
-        }
-        for k, p in config.FORMAT_PRESETS.items()
-    ]
-
-
-def clips_to_gallery(clips: list, info: dict, analyses: dict) -> list:
-    """Arma el payload de la galería. `id` es la posición en la lista."""
-    srv = get_preview_server()
-    out = []
-    for pos, c in enumerate(clips):
-        a = analyses.get(pos) or {}
-        shot = None
-        if a.get("samples"):
-            shot = {
-                "samples":    a["samples"],
-                "twoShot":    a.get("two_shot_ratio", 0.0),
-                "solo":       a.get("solo_ratio", 0.0),
-                "empty":      a.get("empty_ratio", 0.0),
-                "mixed":      bool(a.get("mixed")),
-                "suggestion": a.get("suggestion", ""),
-                "centersX":   a.get("centers_x") or [],
-            }
-        out.append({
-            "id":            pos,
-            "title":         c.get("title", ""),
-            "start":         float(c["start"]),
-            "end":           float(c["end"]),
-            "type":          c.get("type", "insight"),
-            "reason":        c.get("reason", ""),
-            "selected":      bool(c.get("_selected", True)),
-            "format":        normalize_format(c.get("formato")),
-            "speakerFollow": speaker_follow(c),
-            "followShot":    bool(c.get("follow_shot")),
-            "thumbs":        [
-                {"url": srv.url_for(Path(f)), "label": lbl}
-                for f, lbl in (a.get("thumbs") or [])
-            ],
-            "shot":          shot,
-        })
-    return out
-
-
-# Campo de la galería → clave del clip. El encuadre manual (crop_*) NO está acá:
-# se edita en los Pasos 4 y 5 y la galería no debe pisarlo.
-_GALLERY_FIELDS = (
-    ("title",         "title"),
-    ("start",         "start"),
-    ("end",           "end"),
-    ("type",          "type"),
-    ("selected",      "_selected"),
-    ("format",        "formato"),
-    ("speakerFollow", "speaker_follow"),
-    ("followShot",    "follow_shot"),
-)
-
-
-def _gallery_current(clip: dict) -> dict:
-    """El estado actual del clip en el vocabulario de la galería."""
-    return {
-        "title":    clip.get("title", ""),
-        "start":    float(clip["start"]),
-        "end":      float(clip["end"]),
-        "type":     clip.get("type", "insight"),
-        "_selected": bool(clip.get("_selected", True)),
-        "formato":  normalize_format(clip.get("formato")),
-        "speaker_follow": speaker_follow(clip),
-        "follow_shot":    bool(clip.get("follow_shot")),
-    }
-
-
-def apply_gallery(patch: list, clips: list) -> bool:
-    """Vuelca lo editado en la galería sobre los clips. True si algo cambió."""
-    changed = False
-    for row in patch or []:
-        try:
-            pos = int(row.get("id", -1))
-        except (TypeError, ValueError):
-            continue
-        if not (0 <= pos < len(clips)):
-            continue
-        clip    = clips[pos]
-        current = _gallery_current(clip)
-        for src_key, field in _GALLERY_FIELDS:
-            if src_key not in row:
-                continue
-            val = row[src_key]
-            if field in ("start", "end"):
-                val = float(val)
-            elif field in ("_selected", "speaker_follow", "follow_shot"):
-                val = bool(val)
-            elif field == "formato":
-                val = normalize_format(val)
-            else:
-                val = str(val)
-            if current[field] != val:
-                clip[field] = val
-                changed = True
-    return changed
-
 
 # ── Pantalla de publicación (Paso 5) ──────────────────────────────────────────
-
-# Las columnas de texto. El orden es el que se ve en pantalla.
-_PUBLISH_PLATFORMS = [
-    {"key": "tiktok",    "label": "TikTok"},
-    {"key": "instagram", "label": "Instagram"},
-    {"key": "youtube",   "label": "YouTube Shorts"},
-]
 
 
 def get_output_server():
@@ -529,65 +370,6 @@ def _media_url(srv, path) -> str:
         return ""
     return f"{srv.url_for(p)}?v={int(p.stat().st_mtime)}"
 
-
-def clips_to_publish(clips: list) -> list:
-    """Arma el payload del Paso 5. `id` es la posición en la lista."""
-    srv = get_output_server()
-    out = []
-    for pos, c in enumerate(clips):
-        fmt    = normalize_format(c.get("formato"))
-        preset = config.FORMAT_PRESETS[fmt]
-        caps   = c.get("captions") or {}
-        out.append({
-            "id":       pos,
-            "index":    c.get("index", pos + 1),
-            "title":    c.get("title", ""),
-            "start":    float(c["start"]),
-            "end":      float(c["end"]),
-            # La duración real: con jump cuts ya no es end - start.
-            "duration": float(c.get("clip_duration") or (c["end"] - c["start"])),
-            "type":     c.get("type", ""),
-            "reason":   c.get("reason", ""),
-            "format":   fmt,
-            "aspect":   preset["width"] / preset["height"],
-            "videoUrl": _media_url(srv, c.get("output_path")),
-            "coverUrl": _media_url(srv, c.get("cover_path")),
-            "captions": {p["key"]: caps.get(p["key"], "") for p in _PUBLISH_PLATFORMS},
-        })
-    return out
-
-
-def apply_publish(patch: list, clips: list) -> bool:
-    """
-    Vuelca el formato y los textos editados sobre los clips.
-
-    Hasta ahora el Paso 5 dibujaba los captions en un `text_area` y no los leía
-    nunca: editarlos no hacía nada y el CSV y Postiz seguían usando el texto
-    original de Claude. Acá es donde eso se arregla.
-    """
-    changed = False
-    for row in patch or []:
-        try:
-            pos = int(row.get("id", -1))
-        except (TypeError, ValueError):
-            continue
-        if not (0 <= pos < len(clips)):
-            continue
-        clip = clips[pos]
-
-        fmt = normalize_format(row.get("format"))
-        if normalize_format(clip.get("formato")) != fmt:
-            clip["formato"] = fmt
-            changed = True
-
-        caps = dict(clip.get("captions") or {})
-        for plat, texto in (row.get("captions") or {}).items():
-            texto = str(texto)
-            if caps.get(plat, "") != texto:
-                caps[plat] = texto
-                changed = True
-        clip["captions"] = caps
-    return changed
 
 
 # ── Encuadre manual por clip ──────────────────────────────────────────────────
@@ -822,43 +604,6 @@ def framing_controls(clip: dict) -> None:
 
 
 @st.fragment
-def framing_panel(clipped: list) -> None:
-    """
-    Ajustar formato y encuadre de UN clip.
-
-    Es un `fragment`: mover un slider re-ejecuta solo este bloque en vez de toda
-    la página, así no se pierde la posición del scroll ni se vuelven a dibujar
-    los videos de arriba (que es lo que hacía sentir la pantalla "rota" al
-    ajustar). El cambio de formato sí hace un rerun completo a propósito: cambia
-    los badges y el resumen de render que están fuera del fragment.
-    """
-    sel = st.selectbox(
-        "Clip a ajustar",
-        range(len(clipped)),
-        format_func=lambda i: (
-            f"Clip {clipped[i]['index']} · "
-            f"{_FORMAT_BADGE.get(normalize_format(clipped[i].get('formato')), '')} — "
-            f"{clipped[i]['title'][:70]}"
-        ),
-        key="framing_clip_sel",
-    )
-    clip = clipped[sel]
-
-    st.markdown("**Formato**")
-    format_picker(clip, f"p4fmt_{clip['index']}")
-    st.caption("Cambiar el formato acá no re-corta nada; se aplica en el render.")
-
-    st.markdown("**Encuadre**")
-    st.caption(
-        "Para **9:16** y **1:1** elegís a qué persona recortar cuando hay más "
-        "de una. Para **split**, quién va arriba y quién abajo. Sin encuadre "
-        "manual el recorte es automático: **sigue al hablante** (se puede "
-        "apagar para dejar el plano quieto) y, si lo activás, además **sigue la "
-        "toma** y cambia de recorte cuando cambia el plano."
-    )
-    framing_controls(clip)
-    save_state()
-
 
 @st.fragment
 def clip_framing_fragment(clip: dict) -> None:
@@ -1450,7 +1195,9 @@ if st.session_state.stage == "analyzed":
                 _analyses[_pos] = segment_analysis(_clip, _info)
 
     _result = clip_gallery(
-        clips=clips_to_gallery(st.session_state.clips, _info, _analyses),
+        clips=clips_to_gallery(
+            st.session_state.clips, _analyses, get_preview_server().url_for
+        ),
         formats=gallery_formats(),
         types=_EDITOR_TYPES,
         video_url=segment_video_url(_info) if _info else "",
@@ -1535,36 +1282,62 @@ if st.session_state.stage == "clipped":
         go_back()
         st.rerun()
 
-    # Preview en columnas
-    preview_cols = st.columns(min(len(clipped), 3))
-    for i, clip in enumerate(clipped):
-        with preview_cols[i % 3]:
-            fmt_badge = _FORMAT_BADGE.get(normalize_format(clip.get("formato")), "📱 9:16")
-            st.caption(f"**Clip {clip['index']}** {fmt_badge} — {clip['title']}")
-            if Path(clip["clip_path"]).exists():
-                st.video(str(clip["clip_path"]))
-            m, s_ = divmod(int(clip.get("clip_duration") or (clip["end"] - clip["start"])), 60)
-            _extra = ""
-            if clip.get("silence_removed"):
-                _extra = f" · −{clip['silence_removed']:.1f}s de silencio"
-            st.caption(f"_{clip['type']} · {m}:{s_:02d}{_extra}_")
+    st.caption(
+        "Última mirada antes de renderizar: el marco sobre cada foto es lo que "
+        "se queda el formato. Tocá una tarjeta para ajustarle el encuadre abajo."
+    )
 
-    st.divider()
+    _info4 = st.session_state.video_info
 
-    # ── Ajustar formato y encuadre ────────────────────────────────────────────
-    # Se trabaja UN clip por vez a propósito: dibujar los 15 en cada movimiento
-    # de slider hacía todo lento y el preview quedaba diminuto. Y no es un
-    # expander: al cambiar su título (p. ej. "(1 manual)") Streamlit lo trata
-    # como un elemento nuevo y lo colapsa justo cuando estabas ajustando.
-    if clipped:
-        _open = st.toggle(
-            "🎯 Ajustar formato y encuadre",
-            key="framing_open",
-            help="Cambiar el formato de un clip o elegir a quién recorta. "
-                 "No hace falta volver a cortar: el formato solo afecta al render.",
-        )
-        if _open:
-            framing_panel(clipped)
+    # El análisis de la toma ya está cacheado desde el Paso 3 (mismo tramo).
+    _an4 = {}
+    if _info4:
+        with st.spinner("Preparando las fotos de cada clip…"):
+            for _pos, _clip in enumerate(clipped):
+                _an4[_pos] = segment_analysis(_clip, _info4)
+
+    _srv4 = get_preview_server()
+    _res4 = clip_gallery(
+        clips=clips_to_gallery(
+            clipped, _an4, _srv4.url_for,
+            # Acá el corte ya existe: la tarjeta reproduce el archivo real, que
+            # es lo que se va a renderizar (con los jump cuts ya aplicados).
+            clip_url=lambda c: _media_url(_srv4, c.get("clip_path")),
+        ),
+        formats=gallery_formats(),
+        types=_EDITOR_TYPES,
+        video_url=segment_video_url(_info4) if _info4 else "",
+        source_aspect=source_aspect(_info4) if _info4 else 16 / 9,
+        pickable=False,       # ya están cortados: no hay nada que tildar
+        show_timeline=False,  # el timeline corta, y eso ya pasó
+        key=f"gallery4_{_info4.get('video_id', '') if _info4 else 'none'}",
+    )
+
+    _foco4 = 0
+    if _res4:
+        if apply_gallery(_res4.get("clips"), clipped):
+            save_state()
+        try:
+            _foco4 = int(_res4.get("selected") or 0)
+        except (TypeError, ValueError):
+            _foco4 = 0
+
+    # El encuadre manual se queda en Streamlit: saca frames del clip en el
+    # servidor y los dibuja, que es lo que el componente no puede hacer.
+    if 0 <= _foco4 < len(clipped):
+        _c4 = clipped[_foco4]
+        if config.crops(normalize_format(_c4.get("formato"))):
+            st.caption(
+                f"**Clip {_c4.get('index', _foco4 + 1)}** — en **9:16** y **1:1** elegís a "
+                "qué persona recortar cuando hay más de una; en **split**, quién va "
+                "arriba y quién abajo. Sin encuadre manual el recorte sigue al hablante."
+            )
+            clip_framing_fragment(_c4)
+        else:
+            st.caption(
+                f"**Clip {_c4.get('index', _foco4 + 1)}** — este formato muestra el plano "
+                "entero: no hay nada que encuadrar."
+            )
 
     # ── Buscar más clips ──────────────────────────────────────────────────────
     with st.expander("➕ Buscar más clips"):
@@ -1741,9 +1514,9 @@ if st.session_state.stage == "captioned":
         st.rerun()
 
     _pub = clip_publish(
-        clips=clips_to_publish(final_clips),
+        clips=clips_to_publish(final_clips, lambda p: _media_url(get_output_server(), p)),
         formats=gallery_formats(),
-        platforms=_PUBLISH_PLATFORMS,
+        platforms=PUBLISH_PLATFORMS,
         key=f"publish_{video_info['video_id']}",
     )
 

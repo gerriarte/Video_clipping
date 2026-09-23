@@ -397,7 +397,7 @@ da más material para elegir en el editor. Cambio chico, encaja en el Track 2.
 
 ---
 
-## Track 4 — La UI en React, pantalla por pantalla   ✅ FASES 1 y 2 (2026-09-23)
+## Track 4 — La UI en React, pantalla por pantalla   ✅ FASES 1, 2 y 3 (2026-09-23)
 
 > Decisión: la UI se mueve a React **por pantalla**, empezando por la que más
 > dolía. El componente se escribe contra una interfaz de props/callbacks y toda
@@ -505,7 +505,55 @@ Verificado con clic real de mouse: devuelve `true` y el botón dice "copiado".
 es justo lo que el componente no puede hacer. Se dibuja debajo, para el clip que
 esté abierto — el componente informa cuál en `selected`.
 
-### La estructura, después de dos pantallas
+### Fase 3 — El Paso 4 y los tests que faltaban   ✅ (2026-09-23)
+
+**El Paso 4** dibujaba los 20 clips como reproductores en una grilla de 3
+columnas: 20 `<video>` montados a la vez que mostraban un spinner en vez de un
+frame, y las filas se desalineaban cuando un título ocupaba dos líneas. Ahora usa
+la **misma galería del Paso 3** con dos banderas:
+
+- `pickable=False` — ya están cortados, no hay nada que tildar: la tarjeta
+  muestra el número del clip en vez del checkbox y no se apaga.
+- `show_timeline=False` — el editor de timeline corta, y eso ya pasó.
+
+Y dos cosas nuevas que la galería no tenía:
+
+- **`clipUrl` por clip.** Si viene, la tarjeta reproduce el archivo ya cortado
+  en vez de buscar el tramo dentro del original. Importa: después del ajuste de
+  bordes y los jump cuts, el corte real no es el tramo del original.
+- **`selected` en el valor de vuelta.** La tarjeta en foco viaja al host para
+  que dibuje el encuadre manual de *ese* clip debajo. Avisar cuesta un rerun
+  entero, así que solo se manda cuando el host tiene algo que dibujar
+  (`!pickable`): en el Paso 3 hacer foco no cuesta nada.
+
+| Paso 4 | Antes | Ahora |
+|---|---|---|
+| Videos montados | **20** (todos con spinner) | **0** hasta que tocás ▶ |
+| Se ve el contenido sin esperar | no | sí, con el recorte del formato encima |
+| Alto | 2.862 px | 2.751 px |
+
+`framing_panel` y `format_picker` quedaron sin uso: el selectbox "clip a
+ajustar" lo reemplaza tocar la tarjeta, y los botones de formato ya están en
+cada tarjeta.
+
+### `modules/ui_state.py` — la traducción, con tests
+
+`clips_to_gallery`, `apply_gallery`, `clips_to_publish`, `apply_publish` y
+`normalize_format` salieron de `app.py`. No es prolijidad: es **el punto donde
+un error hace perder ediciones sin avisar**, que es exactamente lo que pasó con
+los captions del Paso 5 durante meses sin que se notara.
+
+Para que el módulo no dependa de Streamlit, las funciones reciben un
+`url_for(path) -> str`; los MediaServer siguen siendo de `app.py`.
+
+`tests/test_ui_state.py`: 20 tests. Cubren la normalización de formatos viejos,
+que la galería no pise el encuadre manual, que un payload de ida y vuelta sin
+tocar nada devuelva `False` (si no, cada rerun escribiría el estado en disco al
+pedo), que los captions editados se guarden y que no se borren las plataformas
+que no vinieron en el patch. Se verificó que tienen dientes: inyectando el bug
+viejo (que `apply_publish` no escriba `clip["captions"]`), 2 tests fallan.
+
+### La estructura del frontend
 
 Un solo proyecto de frontend y un solo build; `screen` elige la pantalla.
 
@@ -531,13 +579,16 @@ cosas sin pelearse con nada.
 
 ### Lo que queda para las fases siguientes
 
-- **Paso 4** es el que queda: puede reusar la tarjeta de la galería para el
-  preview, y la lista + detalle del Paso 5 para el encuadre.
-- **Pasos 1 y 2** son formularios cortos; no urge.
-- `apply_gallery`, `clips_to_gallery`, `apply_publish` y `clips_to_publish` viven
-  en `app.py` y por eso no tienen test (nada de `app.py` lo tiene). Son el punto
-  donde un bug significa perder ediciones en silencio — justo lo que pasaba con
-  los captions. Moverlos a un módulo los hace testeables.
+- **Pasos 1 y 2** son formularios cortos; no urge. El único cambio que valdría
+  es la entrada: hoy un archivo local se escribe a mano (`C:\Videos\...`) en vez
+  de arrastrarlo o elegirlo de `episodios/*/_entrada/`.
+- **El tema visual de Streamlit** sigue sin tocar: no hay `.streamlit/config.toml`
+  ni una línea de CSS. Lo que queda de Streamlit (títulos, barra de progreso,
+  sidebar, Paso 6) se ve con el default.
+- **El detector de caras no ve este set.** En el episodio de prueba los 30 tramos
+  dan "sin caras el 100%" y la sugerencia sale `9:16-full` para todos, con caras
+  clarísimas en las fotos. Es el Haar de `segment_preview` contra el fondo verde
+  y el mural, no la galería.
 - **El detector de caras no ve este set.** En el episodio de prueba, los 15
   tramos dan "sin caras el 100%" y la sugerencia sale `9:16-full` para todos,
   aunque las fotos tienen caras claras. Es el Haar de `segment_preview` contra
@@ -559,3 +610,4 @@ cosas sin pelearse con nada.
 | 2026-07-17 | Track 3 (animaciones): 3 overlays (hook / intro-outro / lower-third) como capa sobre el clip, con presets de parámetros (sin LLM), render en paralelo. Planificado, sin implementar. |
 | 2026-09-23 | La UI se mueve a React por pantalla. Empieza la galería de clips (Paso 3); el componente se escribe contra props/callbacks con el bridge de Streamlit aislado, para poder mudarlo a una API sin reescribirlo. |
 | 2026-09-23 | Un solo proyecto de frontend y un solo build para todas las pantallas; `screen` elige cuál montar. Un proyecto npm por componente no funciona (resolución de módulos), y varias entradas HTML tampoco (rutas de assets). |
+| 2026-09-23 | La traducción clips ↔ pantallas sale de `app.py` a `modules/ui_state.py` con tests: es donde un bug hace perder ediciones sin avisar. |

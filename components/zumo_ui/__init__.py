@@ -38,10 +38,12 @@ def clip_gallery(
     types: list,
     video_url: str,
     source_aspect: float = 16 / 9,
+    pickable: bool = True,
+    show_timeline: bool = True,
     key: str | None = None,
 ):
     """
-    Paso 3. Dibuja la galería y devuelve el estado editado de los clips.
+    Pasos 3 y 4. Dibuja la galería y devuelve el estado editado de los clips.
 
     Args:
         clips:  [{id, title, start, end, type, reason, selected, format,
@@ -50,10 +52,14 @@ def clip_gallery(
         types:   opciones del selector de tipo.
         video_url: URL del video fuente (servido con Range) para ver un tramo.
         source_aspect: relación de aspecto de la fuente (ancho/alto).
+        pickable: si se elige qué clips entran al corte (Paso 3). En el Paso 4
+                  ya están cortados: la tarjeta muestra el número del clip y el
+                  foco viaja en `selected` para que el host dibuje el encuadre.
+        show_timeline: si se ofrece saltar al editor de timeline.
 
     Returns:
-        {"clips": [...], "action": "timeline"|None, "nonce": int} o None si el
-        componente todavía no mandó nada.
+        {"clips": [...], "selected": int, "action": "timeline"|None,
+         "nonce": int} o None si el componente todavía no mandó nada.
     """
     return _component_func(
         screen="gallery",
@@ -62,6 +68,8 @@ def clip_gallery(
         types=types,
         videoUrl=video_url,
         sourceAspect=float(source_aspect),
+        pickable=bool(pickable),
+        showTimeline=bool(show_timeline),
         key=key,
         default=None,
     )

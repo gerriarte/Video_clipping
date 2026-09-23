@@ -11,12 +11,17 @@ export interface CardProps {
   videoUrl: string;
   sourceAspect: number;
   t: Tokens;
+  /** Si se elige qué clips entran al corte. Con false la tarjeta no se apaga. */
+  pickable: boolean;
+  /** Si esta es la tarjeta en foco (la que el host acompaña con sus controles). */
+  focused: boolean;
   /** commit=false acumula el cambio; true lo manda al host en el acto. */
   onChange: (id: number, patch: Partial<Clip>, commit: boolean) => void;
+  onFocus: (id: number) => void;
 }
 
 export const ClipCard: React.FC<CardProps> = ({
-  clip, formats, types, videoUrl, sourceAspect, t, onChange,
+  clip, formats, types, videoUrl, sourceAspect, t, pickable, focused, onChange, onFocus,
 }) => {
   const [thumbIdx, setThumbIdx] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -29,15 +34,16 @@ export const ClipCard: React.FC<CardProps> = ({
   const thumb = thumbs[Math.min(thumbIdx, Math.max(0, thumbs.length - 1))];
   const shot = clip.shot;
   const suggested = shot?.suggestion;
-  const off = !clip.selected;
+  const off = pickable && !clip.selected;
 
   return (
     <div
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
+      onMouseDown={() => onFocus(clip.id)}
       style={{
         background: t.card,
-        border: `1px solid ${clip.selected ? t.borderStrong : t.border}`,
+        border: `1px solid ${focused ? t.primary : (pickable && clip.selected) ? t.borderStrong : t.border}`,
         borderRadius: t.radius,
         overflow: "hidden",
         display: "flex",
@@ -53,14 +59,16 @@ export const ClipCard: React.FC<CardProps> = ({
         {playing ? (
           <video
             ref={videoRef}
-            src={`${videoUrl}#t=${clip.start.toFixed(2)},${clip.end.toFixed(2)}`}
+            src={clip.clipUrl || `${videoUrl}#t=${clip.start.toFixed(2)},${clip.end.toFixed(2)}`}
             autoPlay
             controls
             playsInline
             preload="metadata"
-            onLoadedMetadata={(e) => { e.currentTarget.currentTime = clip.start; }}
+            onLoadedMetadata={(e) => {
+              if (!clip.clipUrl) e.currentTarget.currentTime = clip.start;
+            }}
             onTimeUpdate={(e) => {
-              if (e.currentTarget.currentTime > clip.end) {
+              if (!clip.clipUrl && e.currentTarget.currentTime > clip.end) {
                 e.currentTarget.pause();
                 setPlaying(false);
               }
@@ -81,19 +89,23 @@ export const ClipCard: React.FC<CardProps> = ({
             )}
             <CropOverlay id={clip.id} fmt={fmt} centersX={shot?.centersX || []} sourceAspect={sourceAspect} t={t} />
 
-            <button
-              onClick={() => onChange(clip.id, { selected: !clip.selected }, true)}
-              title={clip.selected ? "Sacar del corte" : "Incluir en el corte"}
-              style={{
-                position: "absolute", top: 8, left: 8, width: 24, height: 24,
-                borderRadius: 6, cursor: "pointer", display: "grid", placeItems: "center",
-                background: clip.selected ? t.primary : "rgba(6,8,12,0.66)",
-                border: `1px solid ${clip.selected ? t.primary : "rgba(255,255,255,0.28)"}`,
-                color: "#fff", fontSize: 13, lineHeight: 1, padding: 0,
-              }}
-            >
-              {clip.selected ? "✓" : ""}
-            </button>
+            {pickable ? (
+              <button
+                onClick={() => onChange(clip.id, { selected: !clip.selected }, true)}
+                title={clip.selected ? "Sacar del corte" : "Incluir en el corte"}
+                style={{
+                  position: "absolute", top: 8, left: 8, width: 24, height: 24,
+                  borderRadius: 6, cursor: "pointer", display: "grid", placeItems: "center",
+                  background: clip.selected ? t.primary : "rgba(6,8,12,0.66)",
+                  border: `1px solid ${clip.selected ? t.primary : "rgba(255,255,255,0.28)"}`,
+                  color: "#fff", fontSize: 13, lineHeight: 1, padding: 0,
+                }}
+              >
+                {clip.selected ? "✓" : ""}
+              </button>
+            ) : (
+              <div style={{ position: "absolute", top: 8, left: 8, ...pill }}>{clip.index}</div>
+            )}
 
             <div style={{ position: "absolute", top: 8, right: 8, ...pill }}>{dur(clip.start, clip.end)}</div>
 

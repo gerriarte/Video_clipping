@@ -44,6 +44,7 @@ export const ClipGallery: React.FC<GalleryProps> = ({ args, theme, onCommit, onH
   const [clips, setClipsState] = useState<Clip[]>(incoming);
   const [query, setQuery] = useState("");
   const [onlyPicked, setOnlyPicked] = useState(false);
+  const [focused, setFocused] = useState<number>(incoming[0]?.id ?? 0);
   const rootRef = useRef<HTMLDivElement>(null);
 
   // El estado vive tambien en un ref: los handlers necesitan leer el valor de
@@ -54,6 +55,7 @@ export const ClipGallery: React.FC<GalleryProps> = ({ args, theme, onCommit, onH
   // al volver del editor de timeline) y el usuario repite la misma accion,
   // un contador desde 0 daria el MISMO nonce que la vez anterior y el host
   // la descartaria por repetida.
+  const focusedRef = useRef<number>(focused);
   const nonceRef = useRef(Date.now());
   /** Firma del ultimo commit del que todavia esperamos el eco del host. */
   const pendingRef = useRef<string | null>(null);
@@ -105,11 +107,11 @@ export const ClipGallery: React.FC<GalleryProps> = ({ args, theme, onCommit, onH
   }, [args]);
 
   const commit = useCallback(
-    (list: Clip[], action: GalleryAction = null) => {
+    (list: Clip[], action: GalleryAction = null, sel = focusedRef.current) => {
       pendingRef.current = signature(list);
       missesRef.current = 0;
       nonceRef.current += 1;
-      onCommit({ clips: list.map(toPatch), action, nonce: nonceRef.current });
+      onCommit({ clips: list.map(toPatch), selected: sel, action, nonce: nonceRef.current });
     },
     [onCommit],
   );
@@ -121,6 +123,20 @@ export const ClipGallery: React.FC<GalleryProps> = ({ args, theme, onCommit, onH
       if (doCommit) commit(next);
     },
     [commit, setClips],
+  );
+
+  const focus = useCallback(
+    (id: number) => {
+      if (id === focusedRef.current) return;
+      focusedRef.current = id;
+      setFocused(id);
+      // Avisarle al host cuesta un rerun entero, así que solo se hace cuando
+      // el host dibuja algo para el clip en foco — o sea, cuando no se eligen
+      // clips (Paso 4, donde abajo va el encuadre del clip en foco).
+      if (!args.pickable) commit(clipsRef.current, null, id);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [commit, args.pickable],
   );
 
   const applyAll = useCallback(
@@ -180,14 +196,17 @@ export const ClipGallery: React.FC<GalleryProps> = ({ args, theme, onCommit, onH
         }}
       >
         <strong style={{ fontSize: 13.5 }}>
-          {picked.length} de {clips.length} clips
+          {args.pickable ? `${picked.length} de ${clips.length} clips` : `${clips.length} clips`}
         </strong>
         <span style={{ fontSize: 12, color: t.sub }}>{totalLabel(pickedSeconds)} de video</span>
 
-        <span style={{ width: 1, height: 18, background: t.border }} />
-
-        <Btn t={t} onClick={() => applyAll((c) => ({ ...c, selected: true }))}>Todos</Btn>
-        <Btn t={t} onClick={() => applyAll((c) => ({ ...c, selected: false }))}>Ninguno</Btn>
+        {args.pickable && (
+          <>
+            <span style={{ width: 1, height: 18, background: t.border }} />
+            <Btn t={t} onClick={() => applyAll((c) => ({ ...c, selected: true }))}>Todos</Btn>
+            <Btn t={t} onClick={() => applyAll((c) => ({ ...c, selected: false }))}>Ninguno</Btn>
+          </>
+        )}
         {pending.length > 0 && (
           <Btn
             t={t}
@@ -211,12 +230,17 @@ export const ClipGallery: React.FC<GalleryProps> = ({ args, theme, onCommit, onH
             borderRadius: 7, padding: "5px 9px", outline: "none",
           }}
         />
-        <Btn t={t} active={onlyPicked} onClick={() => setOnlyPicked((v) => !v)}>
-          solo elegidos
-        </Btn>
-        <Btn t={t} title="Ajustar estos cortes en el editor de timeline" onClick={() => commit(clipsRef.current, "timeline")}>
-          {"✂"} Timeline
-        </Btn>
+        {args.pickable && (
+          <Btn t={t} active={onlyPicked} onClick={() => setOnlyPicked((v) => !v)}>
+            solo elegidos
+          </Btn>
+        )}
+        {args.showTimeline && (
+          <Btn t={t} title="Ajustar estos cortes en el editor de timeline"
+               onClick={() => commit(clipsRef.current, "timeline")}>
+            {"✂"} Timeline
+          </Btn>
+        )}
       </div>
 
       {/* Leyenda del recorte: que significa el marco sobre la foto */}
@@ -253,7 +277,10 @@ export const ClipGallery: React.FC<GalleryProps> = ({ args, theme, onCommit, onH
               videoUrl={args.videoUrl}
               sourceAspect={srcAspect}
               t={t}
+              pickable={args.pickable !== false}
+              focused={!args.pickable && c.id === focused}
               onChange={change}
+              onFocus={focus}
             />
           ))}
         </div>
