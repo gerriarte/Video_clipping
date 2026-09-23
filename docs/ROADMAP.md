@@ -697,9 +697,10 @@ variables de `config.py` y del `.env.example`, y la sección de `DEPLOYMENT.md`.
 La salida del pipeline es el CSV, que de paso ahora reporta la duración **real**
 del archivo (con jump cuts no es `end - start`).
 
-`POSTIZ_API_KEY` sigue en la lista negra de `settings.py` a propósito: la
-integración se fue, pero el `.env` de quien venía usando esto la tiene igual, y
-esa lista existe para que una key no termine en un archivo que se comparte.
+`POSTIZ_API_KEY` quedó un tiempo en la lista negra de `settings.py` por si el
+`.env` de alguien la tenía todavía. Se sacó de ahí el 2026-09-23, junto con la
+línea del `.env`: la lista negra es solo `ANTHROPIC_API_KEY`, y ahí va la
+variable de cualquier integración nueva que traiga credenciales.
 
 **El material se elige, no se escribe.** "Archivo local" era un campo de texto
 donde había que tipear `C:\Videos\mi_video.mp4`. Ahora lista lo que hay en una
