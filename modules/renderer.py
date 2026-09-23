@@ -13,6 +13,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from modules.imaging import imread
+from modules.overlays import for_render as overlays_for_render
 
 import config
 from modules.finish import finish
@@ -352,6 +353,7 @@ def render_clip(
     manual_crops: list | None = None,
     layout_segments: list | None = None,
     source_aspect: float | None = None,
+    overlays: dict | None = None,
     fps: int | None = None,
     concurrency: int | None = None,
 ) -> Path:
@@ -387,6 +389,8 @@ def render_clip(
         "focusBottom": focus_bottom,
         "sourceAspect": source_aspect or clip_aspect(clip_path),
     }
+    if overlays:
+        props["overlays"] = overlays
     if manual_crops:
         props["manualCrops"] = manual_crops
     if layout_segments:
@@ -599,6 +603,7 @@ def _render_one(clip: dict, output_dir: Path, clip_url: str,
         manual_crops=manual_crops,
         layout_segments=layout_segments,
         source_aspect=src_aspect,
+        overlays=overlays_for_render(clip),
         fps=fps,
         concurrency=concurrency,
     )

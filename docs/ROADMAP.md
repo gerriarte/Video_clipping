@@ -339,50 +339,81 @@ components/clip_editor/
 
 ---
 
-## Track 3 — Animaciones (overlays con Remotion)   📋 PLANIFICADO
+## Track 3 — Animaciones (overlays con Remotion)   ✅ FASE 1 (2026-09-23)
 
-Generar animaciones **con Remotion** manejadas por parámetros (presets), que van
-como **capa encima del clip** en la misma composición → **sin render ni ffmpeg
-extra**. Reusa el mismo mecanismo que ya existe (props JSON → composición Remotion).
+Dos capas encima del clip, manejadas por parámetros (sin LLM): el **gancho** y
+la **placa de nombre**. Van como overlay y no como placas concatenadas, así que
+**no alargan el clip ni obligan a volver a cortar** — solo afectan al render.
 
-### Alcance acordado (2026-07-17)
-- **3 overlays**, todos sobre el clip:
-  1. **Hook / título animado** — texto cinético (variantes `pop` / `slide-up` /
-     `typewriter`), gancho al inicio o frase destacada.
-  2. **Intro / Outro** — placa sobre los primeros/últimos N segundos (título,
-     subtítulo, logo).
-  3. **Lower-third** — barra con nombre/rol del host que entra en `start` y sale
-     en `start+dur`.
-- **Composición: overlay** (capa encima del video, no placas concatenadas).
-- **Instrucciones: presets con parámetros** (formulario, sin depender del LLM →
-  más predecible).
+### Lo que hay
 
-### Modelo de datos (por clip)
-```python
-clip["overlays"] = {
-  "hook":  {"on", "text", "style", "color", "position", "start", "dur"},
-  "intro": {"on", "title", "subtitle", "logo", "dur"},
-  "outro": {"on", "text", "dur"},
-  "lower": {"on", "name", "role", "start", "dur", "position"},
-}
-```
+**Gancho** (`overlays/HookTitle.tsx`). Una frase grande al arranque. Si no se le
+escribe nada usa el título del clip, que es texto que Claude ya escribió.
+- Tres entradas: aparece de golpe (`pop`), sube desde abajo (`slide`), se
+  escribe sola (`type`).
+- La entrada dura **0,35 s** a propósito: el primer segundo es el que decide si
+  alguien se queda, y no se puede gastar esperando una animación.
+- Lleva un **velo en degradado** detrás. Se agregó después de mirar el primer
+  render: la sombra del texto alcanza sobre una imagen oscura, pero el set tiene
+  un mural blanco y ahí el texto blanco se perdía. El degradado arranca del
+  borde y se va a nada, así no se lee como una caja encima de la cara.
 
-### Cambios
-| Archivo | Cambio |
+**Placa de nombre** (`overlays/LowerThird.tsx`). Nombre y rol de quien habla.
+- Los nombres salen de los **hosts que ya están cargados en Ajustes**: se elige
+  de una lista en vez de escribirlos de nuevo. "Otro…" queda para un invitado.
+- El nombre "lower third" viene de la tele, donde iba en el tercio inferior. En
+  vertical eso queda **debajo de la interfaz de la app**, así que se apoya más
+  arriba (ver `SAFE_BOTTOM`).
+
+**Las zonas seguras** (`overlays/theme.ts`). TikTok, Reels y Shorts dibujan su
+propia interfaz encima del video: se reserva el 18% de abajo y el 10% de arriba.
+Cualquier cosa puesta ahí la tapa la app.
+
+### Lo que cuesta
+
+Medido sobre el mismo clip de 8 s, mismo formato:
+
+| | tiempo |
 |---|---|
-| `remotion/src/ClipComposition.tsx` | Nuevo prop `overlays`; componentes `HookTitle`, `IntroCard`/`OutroCard`, `LowerThird` dibujados **después** de las capas de video (fill/fit/split/manualCrops). Timing con `useCurrentFrame`. |
-| `remotion/package.json` | `@remotion/google-fonts` (una fuente linda). |
-| `modules/renderer.py` | Pasar `overlays` en props; **pool de render** (2–3 procesos Remotion concurrentes) para el "en paralelo" (hoy es secuencial). |
-| `app.py` | Paso 4: expander "✨ Animaciones" por clip con toggles + campos de parámetros; preview real con un **still de Remotion** (1 frame). |
+| sin capas | 29,8 s |
+| con capas | 29,9 s |
 
-### Notas
-- "En paralelo" se traduce en paralelizar los renders de clips (el overlay va en el
-  mismo render); un pool chico evita sobrecargar la CPU (cada render Remotion ya usa
-  concurrencia interna).
-- Esfuerzo: medio. Lo más grande son los componentes de animación (que se vean bien)
-  y el formulario. El pool es acotado.
-- Fase 2 opcional: instrucciones en **texto libre → Claude arma los props** (híbrido),
-  y placas standalone concatenadas para intros más elaboradas.
+Es ruido. Y un clip **sin** capas renderiza idéntico a antes: comparando la
+mitad inferior del cuadro entre los dos renders, la diferencia media es
+**0,36/255** — ruido de codificación, no un cambio visual. Eso es por diseño:
+`for_render` devuelve `None` cuando no hay nada prendido, el prop no viaja y
+`OverlayLayer` corta enseguida.
+
+La fuente se pide con pesos y subset explícitos (`loadFont("normal", {weights:
+["700","900"], subsets: ["latin"]})`): sin argumentos son ~190 peticiones por
+render para usar dos. Es la misma trampa que ya había costado en `ColdOpen`.
+
+### Lo que NO está, y por qué
+
+**Intro / outro como placa.** Estaba en el plan y queda afuera de esta fase. Una
+placa a pantalla completa en un clip de 60 s se come los segundos donde se
+decide la retención, que es justo lo que el gancho resuelve sin costar tiempo de
+pantalla. La cañería es la misma (`overlays/types.ts` + una capa más en
+`OverlayLayer`), así que agregarla después es barato si se la quiere igual.
+
+**Preview sin renderizar.** Hoy las capas se ven al renderizar. Un still de
+Remotion (un frame) daría el preview en la app; es el siguiente paso natural.
+
+### Dónde vive cada cosa
+
+| Archivo | Qué |
+|---|---|
+| `remotion/src/overlays/types.ts` | el contrato (tiempos en segundos, que es lo que edita una persona) |
+| `remotion/src/overlays/theme.ts` | fuente, acento, zonas seguras, la envolvente de entrada/salida |
+| `remotion/src/overlays/HookTitle.tsx` · `LowerThird.tsx` | las capas |
+| `remotion/src/overlays/OverlayLayer.tsx` | las compone; `null` si no hay nada |
+| `remotion/src/ClipComposition.tsx` | `ClipBody` resuelve el video y el recorte; la exportada lo envuelve con las capas **una sola vez**, para no repetirlas en cada rama de layout |
+| `modules/overlays.py` | defaults, validación, recorte de tiempos a la duración del clip |
+| `app.py` | pestaña "✨ Capas" en el Paso 4, sobre el clip en foco |
+
+`modules/overlays.py` tiene 23 tests. El que más importa: **una capa no puede
+arrancar después de que el clip terminó** — un gancho en el segundo 80 de un
+clip de 60 no se ve nunca, y descubrirlo cuesta un render entero.
 
 ---
 
@@ -747,8 +778,7 @@ cosas sin pelearse con nada.
 
 ### Lo que queda para las fases siguientes
 
-- Nada pendiente de la UI. Lo que queda del proyecto es el **Track 3**
-  (animaciones con Remotion), que es una funcionalidad nueva, no una mejora.
+- Nada pendiente de la UI.
 - **El detector de caras no ve este set.** En el episodio de prueba, los 15
   tramos dan "sin caras el 100%" y la sugerencia sale `9:16-full` para todos,
   aunque las fotos tienen caras claras. Es el Haar de `segment_preview` contra
@@ -774,3 +804,4 @@ cosas sin pelearse con nada.
 | 2026-09-23 | La API key se pone desde la app y va al `.env`, nunca a `settings.json` ni al estado. `config.py` deja de reventar al importar: sin key la app abre y te lleva a configurarla. |
 | 2026-09-23 | Se saca la integración con Postiz: no funciona del lado de Postiz. La salida del pipeline es el CSV. |
 | 2026-09-23 | `cv2.imread` no lee rutas con acentos en Windows: se prohíbe en el proyecto, va `modules.imaging.imread`. Cualquier ruta de esta app puede tener una tilde, porque sale del título del episodio. |
+| 2026-09-23 | Track 3 fase 1: gancho y placa de nombre como overlay. Intro/outro queda afuera — una placa a pantalla completa se come los segundos donde se decide la retención, que es lo que el gancho resuelve sin costar tiempo. |

@@ -14,6 +14,8 @@ import {
 // NO le aplica — va como prop — y no existe `object-position`. El recorte
 // horizontal se hace moviendo un contenedor (ver `CoveredVideo`).
 import { Video } from "@remotion/media";
+import { OverlayLayer } from "./overlays/OverlayLayer";
+import type { Overlays } from "./overlays/types";
 
 /** Keyframe de la "cámara" que sigue al hablante.
  *  t = segundos en la línea de tiempo del archivo de clip; x = objectPosition X (0–1). */
@@ -51,6 +53,9 @@ export interface ClipCompositionProps {
    *  horizontal a mano: el <Video> de @remotion/media dibuja en canvas y no
    *  tiene `object-position`, así que ya no lo resuelve el CSS. 16:9 por defecto. */
   sourceAspect?:    number;
+  /** Capas encima del video (gancho, placa de nombre). Ver overlays/types.ts.
+   *  Sin esto el clip se renderiza exactamente como antes. */
+  overlays?:        Overlays;
   /** Recorte que SIGUE LA TOMA: el layout cambia dentro del clip (split mientras
    *  están los dos, recorte cerrado cuando la cámara va a uno). Las dimensiones
    *  no cambian nunca — lo que cambia es cómo se recorta el mismo lienzo.
@@ -296,7 +301,7 @@ const ClipVisual: React.FC<{
   </AbsoluteFill>
 );
 
-export const ClipComposition: React.FC<ClipCompositionProps> = ({
+const ClipBody: React.FC<ClipCompositionProps> = ({
   clipPath,
   fps,
   layout = "fit",
@@ -408,3 +413,19 @@ export const ClipComposition: React.FC<ClipCompositionProps> = ({
     />
   );
 };
+
+
+/**
+ * El clip, con sus capas encima.
+ *
+ * `ClipBody` resuelve el video y el recorte (y tiene varias ramas: fill, fit,
+ * letterbox, split, seguir la toma). Las capas se dibujan después, una sola
+ * vez, para no repetirlas en cada rama — y para que agregar una capa nueva no
+ * obligue a tocar la lógica de recorte.
+ */
+export const ClipComposition: React.FC<ClipCompositionProps> = (props) => (
+  <>
+    <ClipBody {...props} />
+    <OverlayLayer overlays={props.overlays} fallbackText={props.title} />
+  </>
+);

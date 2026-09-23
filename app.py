@@ -56,6 +56,9 @@ try:
     from modules.segment_preview import analyze_segment
     from modules.library    import find_videos, label_for
     from modules.imaging    import imread
+    from modules.overlays   import (
+        normalize as normalize_overlays, parse_hosts, describe as describe_overlays,
+    )
     from modules.settings   import (
         load_settings, save_settings, settings_exist,
         env_read, env_upsert, mask_key,
@@ -314,6 +317,101 @@ def segment_video_url(info: dict) -> str:
         src = proxy
     return get_media_server().url_for(src)
 
+
+
+# ── Capas encima del clip (gancho y placa de nombre) ──────────────────────────
+# Van como overlay: NO alargan el clip ni obligan a volver a cortar, solo
+# afectan al render. Por eso los controles viven acá, en el paso previo al
+# render, y no antes de cortar.
+
+@st.fragment
+def overlay_controls(clip: dict) -> None:
+    """
+    Gancho y placa de un clip. Es un fragment: tocar un control no vuelve a
+    dibujar la galería entera de arriba.
+    """
+    capas   = normalize_overlays(clip.get("overlays"),
+                                 clip.get("clip_duration") or (clip["end"] - clip["start"]))
+    hook    = capas["hook"]
+    lower   = capas["lower"]
+    idx     = clip.get("index", 0)
+    cambio  = False
+
+    col_h, col_l = st.columns(2)
+
+    with col_h:
+        _on = st.checkbox("✨ Gancho", value=hook["on"], key=f"ov_hook_on_{idx}",
+                          help="Una frase grande al arranque. Si la dejás vacía, "
+                               "usa el título del clip.")
+        if _on != hook["on"]:
+            hook["on"] = _on; cambio = True
+        if _on:
+            _txt = st.text_input("Texto", value=hook["text"], key=f"ov_hook_txt_{idx}",
+                                 placeholder=clip.get("title", ""))
+            _est = st.selectbox(
+                "Entrada", options=["pop", "slide", "type"],
+                format_func=lambda k: {"pop": "Aparece de golpe",
+                                       "slide": "Sube desde abajo",
+                                       "type": "Se escribe sola"}[k],
+                index=["pop", "slide", "type"].index(hook["style"]),
+                key=f"ov_hook_est_{idx}",
+            )
+            _pos = st.radio(
+                "Dónde", options=["top", "center", "bottom"],
+                format_func=lambda k: {"top": "Arriba", "center": "Al medio",
+                                       "bottom": "Abajo"}[k],
+                index=["top", "center", "bottom"].index(hook["position"]),
+                horizontal=True, key=f"ov_hook_pos_{idx}",
+            )
+            _t0, _dur = st.columns(2)
+            _s = _t0.number_input("Desde (s)", 0.0, 60.0, float(hook["start"]), 0.1,
+                                  key=f"ov_hook_s_{idx}")
+            _d = _dur.number_input("Dura (s)", 0.3, 30.0, float(hook["dur"]), 0.1,
+                                   key=f"ov_hook_d_{idx}")
+            for clave, val in (("text", _txt), ("style", _est), ("position", _pos),
+                               ("start", _s), ("dur", _d)):
+                if hook[clave] != val:
+                    hook[clave] = val; cambio = True
+
+    with col_l:
+        _on = st.checkbox("🪪 Placa de nombre", value=lower["on"], key=f"ov_low_on_{idx}",
+                          help="Nombre y rol de quien habla, abajo a un costado.")
+        if _on != lower["on"]:
+            lower["on"] = _on; cambio = True
+        if _on:
+            # Los hosts ya están cargados en Ajustes: no hay por qué escribirlos
+            # de nuevo. "Otro…" queda para un invitado.
+            _hosts = parse_hosts(st.session_state.get("ch_hosts", ""))
+            _OTRO  = "Otro…"
+            _nombres = [h["name"] for h in _hosts] + [_OTRO]
+            _idx_sel = _nombres.index(lower["name"]) if lower["name"] in _nombres else len(_nombres) - 1
+            _quien = st.selectbox("Quién", options=_nombres, index=_idx_sel,
+                                  key=f"ov_low_quien_{idx}")
+            if _quien == _OTRO:
+                _nom = st.text_input("Nombre", value=lower["name"], key=f"ov_low_nom_{idx}")
+                _rol = st.text_input("Rol", value=lower["role"], key=f"ov_low_rol_{idx}")
+            else:
+                _nom = _quien
+                _rol = next((h["role"] for h in _hosts if h["name"] == _quien), "")
+                st.caption(_rol or "sin rol cargado")
+            _lado = st.radio("Lado", options=["left", "right"],
+                             format_func=lambda k: "Izquierda" if k == "left" else "Derecha",
+                             index=["left", "right"].index(lower["side"]),
+                             horizontal=True, key=f"ov_low_lado_{idx}")
+            _t0, _dur = st.columns(2)
+            _s = _t0.number_input("Desde (s)", 0.0, 60.0, float(lower["start"]), 0.1,
+                                  key=f"ov_low_s_{idx}")
+            _d = _dur.number_input("Dura (s)", 0.3, 30.0, float(lower["dur"]), 0.1,
+                                   key=f"ov_low_d_{idx}")
+            for clave, val in (("name", _nom), ("role", _rol), ("side", _lado),
+                               ("start", _s), ("dur", _d)):
+                if lower[clave] != val:
+                    lower[clave] = val; cambio = True
+
+    if cambio:
+        clip["overlays"] = capas
+        save_state()
+        _rerun_here()
 
 
 # ── Galería de clips (componente custom) ──────────────────────────────────────
@@ -1534,18 +1632,25 @@ if st.session_state.stage == "clipped":
     # servidor y los dibuja, que es lo que el componente no puede hacer.
     if 0 <= _foco4 < len(clipped):
         _c4 = clipped[_foco4]
-        if config.crops(normalize_format(_c4.get("formato"))):
+        st.markdown(f"**Clip {_c4.get('index', _foco4 + 1)}**")
+
+        _tab_enc, _tab_cap = st.tabs(["🎯 Encuadre", "✨ Capas"])
+        with _tab_enc:
+            if config.crops(normalize_format(_c4.get("formato"))):
+                st.caption(
+                    "En **9:16** y **1:1** elegís a qué persona recortar cuando hay más "
+                    "de una; en **split**, quién va arriba y quién abajo. Sin encuadre "
+                    "manual el recorte sigue al hablante."
+                )
+                clip_framing_fragment(_c4)
+            else:
+                st.caption("Este formato muestra el plano entero: no hay nada que encuadrar.")
+        with _tab_cap:
             st.caption(
-                f"**Clip {_c4.get('index', _foco4 + 1)}** — en **9:16** y **1:1** elegís a "
-                "qué persona recortar cuando hay más de una; en **split**, quién va "
-                "arriba y quién abajo. Sin encuadre manual el recorte sigue al hablante."
+                "Se dibujan encima del video: no alargan el clip ni hace falta volver "
+                "a cortar. Se ven al renderizar."
             )
-            clip_framing_fragment(_c4)
-        else:
-            st.caption(
-                f"**Clip {_c4.get('index', _foco4 + 1)}** — este formato muestra el plano "
-                "entero: no hay nada que encuadrar."
-            )
+            overlay_controls(_c4)
 
     # ── Buscar más clips ──────────────────────────────────────────────────────
     with st.expander("➕ Buscar más clips"):
