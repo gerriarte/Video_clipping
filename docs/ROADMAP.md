@@ -837,6 +837,56 @@ cosas sin pelearse con nada.
 
 ---
 
+## Remotion 4.0.500 → 4.0.527   ✅ (2026-09-23)
+
+`npx remotion upgrade` calcula bien el conjunto de paquetes (todos los
+`@remotion/*` tienen que ir en la misma versión) pero **en Windows no puede
+lanzar `npm`**: falla con `ENOENT spawn npm` porque busca `npm` y no `npm.cmd`.
+La vuelta es dejar que imprima el comando y correrlo a mano. Sube también `zod`
+(4.4.3 → 4.5.4), que va de la mano.
+
+**Verificado contra una referencia, no de palabra.** Se renderizó el mismo clip
+de 8 s con gancho, placa de nombre y placa de cierre, antes y después:
+
+| | 4.0.500 | 4.0.527 |
+|---|---|---|
+| Dimensiones / fps / códec / duración | 1080×1920 · 30 · h264 · 8,107 s | **idéntico** |
+| Tiempo de render (mediana de 3) | 31,0 s | **31,2 s** |
+| Diferencia media entre frames | — | 1,6/255 · 1,07 difuminando 3 px |
+
+La primera corrida después de actualizar tardó 42,4 s, pero es arranque en frío:
+las tres siguientes dieron 31,7 / 31,2 / 30,2. La diferencia entre frames es
+ruido de compresión sobre los bordes de alto contraste (texto, el mural del
+fondo): al difuminar cae a ~1/255 y no hay corrimiento — el texto, la barra de
+acento y el recorte caen en el mismo lugar.
+
+`src/` compila limpio; los 7 errores de `tsc` son de las definiciones de tipos
+de `node_modules` y son los mismos que antes.
+
+### El Studio colgado: no era la versión
+
+Estaba anotado que el Studio arrancaba tirando `TypeError: Cannot use 'in'
+operator to search for 'width' in undefined` y que "se cae solo al subir de
+versión". No era eso. El Studio se queda **para siempre** en *"Running
+calculateMetadata()…"* al abrir `ClipComposition`, y la causa es local:
+`public/preview.mp4` está gitignorado y **no existe**.
+
+El guard que había (`if (!p.clipPath)`) no lo atrapa, porque `staticFile()`
+devuelve una ruta igual aunque el archivo no esté. Y un `try/catch` tampoco
+alcanza — se probó: contra un archivo inexistente `getVideoMetadata` **no
+rechaza, se cuelga**, así que no hay error que atrapar. Lo que funciona es una
+carrera contra el reloj (4 s) y caer a una duración de muestra.
+
+Con eso el Studio abre la composición (timeline de 30 s, lienzo negro porque no
+hay video) en vez de quedarse girando. Sigue siendo mejor dejar un
+`remotion/public/preview.mp4` para previsualizar de verdad.
+
+**Los proyectos de `episodios/` quedan en 4.0.494 a propósito:** son proyectos
+aparte, y `episodios/criterio/` ya está renderizado y sincronizado al VO. Subir
+su versión es cambiar la herramienta de un episodio terminado sin necesidad.
+
+---
+
 ## Registro de decisiones
 
 | Fecha | Decisión |
@@ -855,3 +905,4 @@ cosas sin pelearse con nada.
 | 2026-09-23 | Se saca la integración con Postiz: no funciona del lado de Postiz. La salida del pipeline es el CSV. |
 | 2026-09-23 | `cv2.imread` no lee rutas con acentos en Windows: se prohíbe en el proyecto, va `modules.imaging.imread`. Cualquier ruta de esta app puede tener una tilde, porque sale del título del episodio. |
 | 2026-09-23 | Track 3 fase 1: gancho y placa de nombre como overlay. Intro/outro queda afuera — una placa a pantalla completa se come los segundos donde se decide la retención, que es lo que el gancho resuelve sin costar tiempo. |
+| 2026-09-23 | Remotion 4.0.500 → 4.0.527, verificado contra un render de referencia. `remotion upgrade` no puede lanzar npm en Windows (busca `npm`, no `npm.cmd`): el comando se corre a mano. Los proyectos de `episodios/` se quedan en 4.0.494. |

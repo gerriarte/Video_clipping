@@ -69,12 +69,27 @@ export const Root: React.FC = () => {
             return { durationInFrames: p.durationInFrames };
           }
 
-          // Fallback para Remotion Studio (preview interactivo)
-          if (!p.clipPath) return { durationInFrames: 900 };
-          const meta = await getVideoMetadata(p.clipPath as string);
+          // Fallback para Remotion Studio (preview interactivo).
+          //
+          // `public/preview.mp4` está gitignorado, así que en una copia recién
+          // clonada no existe — pero `staticFile()` devuelve una ruta igual, y
+          // el guard de `!p.clipPath` no lo atrapa. Contra un archivo que no
+          // está, `getVideoMetadata` **no rechaza: se cuelga**, y el Studio se
+          // queda para siempre en "Running calculateMetadata()…" sin decir por
+          // qué. Por eso hace falta una carrera contra el reloj y no un
+          // try/catch: no hay error que atrapar.
+          const DURACION_DE_MUESTRA = 900; // 30 s a 30 fps
+          const ESPERA_MAXIMA_MS = 4000;
+          if (!p.clipPath) return { durationInFrames: DURACION_DE_MUESTRA };
+
+          const medido = await Promise.race([
+            getVideoMetadata(p.clipPath as string).catch(() => null),
+            new Promise<null>((r) => setTimeout(() => r(null), ESPERA_MAXIMA_MS)),
+          ]);
+          if (!medido) return { durationInFrames: DURACION_DE_MUESTRA };
           return {
             durationInFrames: Math.ceil(
-              meta.durationInSeconds * ((p.fps as number) ?? 30)
+              medido.durationInSeconds * ((p.fps as number) ?? 30)
             ),
           };
         }}

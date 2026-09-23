@@ -8,16 +8,16 @@
     "render": "npx remotion render"
   },
   "dependencies": {
-    "@remotion/bundler": "4.0.500",
-    "@remotion/cli": "4.0.500",
-    "@remotion/google-fonts": "4.0.500",
-    "@remotion/layout-utils": "4.0.500",
-    "@remotion/media": "4.0.500",
-    "@remotion/media-utils": "4.0.500",
-    "@remotion/renderer": "4.0.500",
-    "@remotion/zod-types": "4.0.500",
-    "remotion": "4.0.500",
-    "zod": "4.4.3"
+    "@remotion/bundler": "4.0.527",
+    "@remotion/cli": "4.0.527",
+    "@remotion/google-fonts": "4.0.527",
+    "@remotion/layout-utils": "4.0.527",
+    "@remotion/media": "4.0.527",
+    "@remotion/media-utils": "4.0.527",
+    "@remotion/renderer": "4.0.527",
+    "@remotion/zod-types": "4.0.527",
+    "remotion": "4.0.527",
+    "zod": "4.5.4"
   },
   "devDependencies": {
     "@types/react": "^18.0.0",
