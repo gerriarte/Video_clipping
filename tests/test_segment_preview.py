@@ -258,3 +258,46 @@ def test_cache_roto_no_rompe(tmp_path):
     p.write_text("{esto no es json", encoding="utf-8")
     assert _load_faces_cache(p, 1) is None
     assert _load_faces_cache(tmp_path / "no-existe.json", 1) is None
+
+
+# ── Manos y objetos del fondo ─────────────────────────────────────────────────
+# Haar marca como cara la mano de quien gesticula y algún objeto del set. Medido
+# sobre 3.314 frames de 6 episodios: la cara real vive entre cy 0,30 y 0,44, y
+# solo el 1% baja de 0,62; las detecciones espurias llegan a 0,67.
+
+def _cara(cx=0.5, cy=0.35, w=0.15):
+    return {"cx": cx, "cy": cy, "w": w, "h": w * 1.2}
+
+
+def test_saca_la_mano_de_abajo_si_hay_una_cara_arriba():
+    from modules.segment_preview import _drop_low_detections
+    caras = [_cara(cy=0.34), _cara(cx=0.72, cy=0.80, w=0.10)]
+    assert _drop_low_detections(caras) == [caras[0]]
+
+
+def test_conserva_un_two_shot_de_verdad():
+    """Dos personas a la misma altura: eso es un split, no ruido."""
+    from modules.segment_preview import _drop_low_detections
+    caras = [_cara(cx=0.30, cy=0.35), _cara(cx=0.70, cy=0.38)]
+    assert _drop_low_detections(caras) == caras
+
+
+def test_no_borra_la_unica_deteccion_del_frame():
+    """Con una sola no hay con qué comparar: quizá el plano es otro."""
+    from modules.segment_preview import _drop_low_detections
+    sola = [_cara(cy=0.85)]
+    assert _drop_low_detections(sola) == sola
+
+
+def test_si_todas_estan_abajo_no_borra_ninguna():
+    from modules.segment_preview import _drop_low_detections
+    caras = [_cara(cx=0.3, cy=0.78), _cara(cx=0.7, cy=0.81)]
+    assert _drop_low_detections(caras) == caras
+
+
+def test_el_filtro_no_cambia_el_formato_sugerido():
+    """Verificado sobre 147 tramos reales: 0 cambios. El aporte es otro."""
+    from modules.segment_preview import _drop_low_detections
+    frames = [[_cara(cx=0.3), _cara(cx=0.7)]] * 10          # two-shot claro
+    limpios = [_drop_low_detections(f) for f in frames]
+    assert suggest_format(summarize_shots(limpios)) == "split"

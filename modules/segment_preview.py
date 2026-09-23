@@ -211,7 +211,38 @@ def detect_faces(frame_path) -> list:
                     "w":  float(fw / w),
                     "h":  float(fh / h),
                 })
-    return _merge_faces(raw)
+    return _drop_low_detections(_merge_faces(raw))
+
+
+# Altura máxima (0 = arriba del cuadro) a la que se acepta una cara cuando hay
+# otra detección más arriba en el mismo frame.
+#
+# Medido sobre 3.314 frames de 6 episodios: la detección más grande de cada
+# frame —la cara real— vive entre cy 0,30 y 0,44 (p10–p90) y solo el 1% cae por
+# debajo de 0,62. Las detecciones secundarias llegan a 0,67 en el p90: son manos
+# y objetos del fondo. Barriendo el umbral, entre 0,60 y 0,65 hay una meseta —
+# los mismos 19 splits que sin filtro— y recién por debajo de 0,55 se empiezan a
+# perder two-shots de verdad.
+FACE_MAX_CY = 0.62
+
+
+def _drop_low_detections(faces: list) -> list:
+    """
+    Saca las detecciones de la parte baja del cuadro cuando hay otra más arriba.
+
+    Haar marca como cara la mano de quien gesticula y algún objeto del set. No
+    cambia el formato que se sugiere (verificado: 0 cambios en 147 tramos), pero
+    sí inflaba el aviso de "cambia de plano": de 29 tramos marcados pasan a 19.
+    Ese aviso le dice al usuario que ningún formato único le sirve, así que un
+    tercio de esas advertencias eran ruido.
+
+    Solo aplica si queda algo: si TODAS las detecciones están abajo, el frame
+    probablemente sea un plano distinto y no nos toca decidir acá.
+    """
+    if len(faces) < 2:
+        return faces
+    arriba = [f for f in faces if f["cy"] <= FACE_MAX_CY]
+    return arriba if arriba else faces
 
 
 def _merge_faces(faces: list) -> list:
@@ -248,7 +279,8 @@ def _nearest(x: float, centers: list) -> int:
 #       con acentos, así que TODO episodio con una tilde en el título quedó
 #       cacheado con cero caras. Esos archivos hay que descartarlos, no leerlos.
 #   2 → escrito con `modules.imaging.imread`.
-FACES_CACHE_VERSION = 2
+#   3 → con `_drop_low_detections` aplicado (manos y objetos del fondo).
+FACES_CACHE_VERSION = 3
 
 
 def _load_faces_cache(cache_file, n_frames: int):

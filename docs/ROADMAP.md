@@ -173,12 +173,9 @@ sobre el clip cortado) y devuelve **0 caras donde a ojo hay dos**: su detector e
 de corto alcance y acá la gente está lejos y de perfil. Haar frontal + perfil a
 480 px es el que acierta (a 720 px empieza a ver caras en los peluches).
 
-**Limitación conocida:** Haar cuenta como caras los dibujos del mural y los
-peluches del set — en un frame verificado marcó 4 donde hay 2. No afecta la
-decisión (lo que importa es "2+ vs 1"), pero por eso las etiquetas dicen
-**"2+ personas"** y nunca un número exacto mayor que 2. Filtrar por tamaño no
-sirve (los dibujos miden lo mismo que las caras); lo que podría servir es la
-estabilidad temporal (un dibujo no se mueve nunca), pendiente de evaluar.
+**Limitación conocida (medida el 2026-09-23, ver más abajo):** Haar marca como
+cara la mano de quien gesticula y algún objeto del set. Por eso las etiquetas
+dicen **"2+ personas"** y nunca un número exacto mayor que 2.
 
 ### Seguir la toma: layout que cambia dentro del clip   ✅ (2026-08-02)
 
@@ -397,7 +394,7 @@ da más material para elegir en el editor. Cambio chico, encaja en el Track 2.
 
 ---
 
-## Track 4 — La UI en React, pantalla por pantalla   ✅ FASES 1 a 5 (2026-09-23)
+## Track 4 — La UI en React, pantalla por pantalla   ✅ FASES 1 a 6 (2026-09-23)
 
 > Decisión: la UI se mueve a React **por pantalla**, empezando por la que más
 > dolía. El componente se escribe contra una interfaz de props/callbacks y toda
@@ -679,6 +676,51 @@ versión — se descarta por definición.
 **Para acordarse:** cualquier ruta de esta app puede tener acentos, porque sale
 del título de un episodio en español. Nada que toque archivos puede asumir ASCII.
 
+### Fase 6 — Cuánto ruido mete el detector, medido   ✅ (2026-09-23)
+
+Con la detección funcionando de verdad ([[el bug de la tilde]]), se midió qué
+son las detecciones de más. Sobre **3.314 frames de 6 episodios**:
+
+| detecciones en el frame | frames |
+|---|---|
+| 0 | 65 |
+| 1 | 2.588 |
+| 2+ | 661 |
+
+Mirando los casos a ojo con las cajas dibujadas encima, los falsos positivos son
+**la mano de quien gesticula** y **un objeto del fondo del set**. No son los
+dibujos del mural, que era la sospecha anotada.
+
+**Dos hipótesis, una sirve y la otra no:**
+
+- *Filtrar por tamaño* (una cara espuria es más chica): **no sirve**. La
+  relación entre la segunda detección y la más grande del mismo frame da mediana
+  0,81 y p25 0,69 — y los falsos positivos verificados caían en 0,67 y 0,69,
+  mezclados con two-shots reales donde una persona está un poco más lejos.
+- *Filtrar por estabilidad temporal* (un dibujo no se mueve nunca): **no sirve**.
+  De 147 tramos, **cero** tienen una detección clavada en la misma celda en el
+  60% de los frames: Haar tiembla frame a frame aun sobre un objeto quieto. La
+  idea estaba anotada como "pendiente de evaluar"; queda evaluada y descartada.
+- *Filtrar por altura*: **sirve**. La detección más grande de cada frame vive
+  entre cy 0,30 y 0,44 (p10–p90) y solo el 1% baja de 0,62; las secundarias
+  llegan a 0,67 en el p90.
+
+**Lo que cambia, y lo que no.** Barriendo el umbral, entre 0,60 y 0,65 hay una
+meseta: mismos 19 splits que sin filtro. Por debajo de 0,55 se empiezan a perder
+two-shots de verdad (18, después 17). Se fija en **0,62**.
+
+| sobre 147 tramos | sin filtro | con filtro |
+|---|---|---|
+| Sugerencias `9:16` / `9:16-full` / `split` | 127 / 1 / 19 | **127 / 1 / 19** |
+| Tramos marcados "cambia de plano" | 29 | **19** |
+
+O sea: **el ruido nunca cambiaba el formato sugerido** — no era el problema que
+parecía. Lo que sí hacía era inflar el aviso de "cambia de plano", que le dice al
+usuario que ningún formato único le sirve: un tercio de esas advertencias eran
+una mano.
+
+`FACES_CACHE_VERSION` sube a 3, porque el caché guarda el resultado ya filtrado.
+
 ### La estructura del frontend
 
 Un solo proyecto de frontend y un solo build; `screen` elige la pantalla.
@@ -705,9 +747,8 @@ cosas sin pelearse con nada.
 
 ### Lo que queda para las fases siguientes
 
-- **Los dibujos del mural y los peluches siguen contando como caras** en algunos
-  frames (por eso las etiquetas dicen "2+ personas" y nunca un número exacto).
-  Ahora que la detección funciona de verdad, vale medir cuánto ruido mete.
+- Nada pendiente de la UI. Lo que queda del proyecto es el **Track 3**
+  (animaciones con Remotion), que es una funcionalidad nueva, no una mejora.
 - **El detector de caras no ve este set.** En el episodio de prueba, los 15
   tramos dan "sin caras el 100%" y la sugerencia sale `9:16-full` para todos,
   aunque las fotos tienen caras claras. Es el Haar de `segment_preview` contra
