@@ -7,8 +7,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Clip, ClipPatch, GalleryAction, GalleryArgs, GalleryValue, Theme } from "./types";
 import { ClipCard } from "./ClipCard";
-import { FormatGlyph } from "./Crop";
-import { tokens, totalLabel, type Tokens } from "./ui";
+import { FormatGlyph } from "../Crop";
+import { tokens, totalLabel, type Tokens } from "../theme";
 
 export interface GalleryProps {
   args: GalleryArgs;

@@ -56,7 +56,7 @@ try:
     from modules.media_server import MediaServer
     from modules.segment_preview import analyze_segment
     from components.clip_editor import clip_editor
-    from components.clip_gallery import clip_gallery
+    from components.zumo_ui     import clip_gallery, clip_publish
     CONFIG_OK    = True
     CONFIG_ERROR = None
 except EnvironmentError as e:
@@ -229,24 +229,6 @@ def make_live_logger(placeholder):
             placeholder.code(preview, language=None)
     return _log
 
-
-def copy_btn(label: str, text: str, key: str):
-    """Botón que copia texto al portapapeles vía JS."""
-    safe = text.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
-    st.components.v1.html(
-        f"""
-        <button onclick="navigator.clipboard.writeText(`{safe}`)
-                         .then(()=>{{
-                           this.textContent='✅ Copiado!';
-                           setTimeout(()=>this.textContent='{label}',2000)
-                         }})"
-                style="background:#ff4b4b;color:white;border:none;padding:8px 18px;
-                       border-radius:6px;cursor:pointer;font-size:13px;width:100%;
-                       font-family:sans-serif;font-weight:600">
-          {label}
-        </button>""",
-        height=44,
-    )
 
 
 # ── Formatos por clip ─────────────────────────────────────────────────────────
@@ -509,6 +491,102 @@ def apply_gallery(patch: list, clips: list) -> bool:
             if current[field] != val:
                 clip[field] = val
                 changed = True
+    return changed
+
+
+# ── Pantalla de publicación (Paso 5) ──────────────────────────────────────────
+
+# Las columnas de texto. El orden es el que se ve en pantalla.
+_PUBLISH_PLATFORMS = [
+    {"key": "tiktok",    "label": "TikTok"},
+    {"key": "instagram", "label": "Instagram"},
+    {"key": "youtube",   "label": "YouTube Shorts"},
+]
+
+
+def get_output_server():
+    """Server HTTP de sesión para `output/` (clips renderizados y portadas)."""
+    srv = st.session_state.get("_output_server")
+    if srv is None:
+        srv = MediaServer(config.OUTPUT_DIR)  # puerto efímero
+        srv.start()
+        st.session_state["_output_server"] = srv
+    return srv
+
+
+def _media_url(srv, path) -> str:
+    """
+    URL del archivo, o "" si todavía no existe.
+
+    Lleva la marca de tiempo como query: sin eso, después de re-renderizar un
+    clip el navegador seguiría mostrando el video viejo de su caché (la ruta no
+    cambia). `translate_path` ignora la query, así que el server no se entera.
+    """
+    if not path:
+        return ""
+    p = Path(str(path))
+    if not p.exists():
+        return ""
+    return f"{srv.url_for(p)}?v={int(p.stat().st_mtime)}"
+
+
+def clips_to_publish(clips: list) -> list:
+    """Arma el payload del Paso 5. `id` es la posición en la lista."""
+    srv = get_output_server()
+    out = []
+    for pos, c in enumerate(clips):
+        fmt    = normalize_format(c.get("formato"))
+        preset = config.FORMAT_PRESETS[fmt]
+        caps   = c.get("captions") or {}
+        out.append({
+            "id":       pos,
+            "index":    c.get("index", pos + 1),
+            "title":    c.get("title", ""),
+            "start":    float(c["start"]),
+            "end":      float(c["end"]),
+            # La duración real: con jump cuts ya no es end - start.
+            "duration": float(c.get("clip_duration") or (c["end"] - c["start"])),
+            "type":     c.get("type", ""),
+            "reason":   c.get("reason", ""),
+            "format":   fmt,
+            "aspect":   preset["width"] / preset["height"],
+            "videoUrl": _media_url(srv, c.get("output_path")),
+            "coverUrl": _media_url(srv, c.get("cover_path")),
+            "captions": {p["key"]: caps.get(p["key"], "") for p in _PUBLISH_PLATFORMS},
+        })
+    return out
+
+
+def apply_publish(patch: list, clips: list) -> bool:
+    """
+    Vuelca el formato y los textos editados sobre los clips.
+
+    Hasta ahora el Paso 5 dibujaba los captions en un `text_area` y no los leía
+    nunca: editarlos no hacía nada y el CSV y Postiz seguían usando el texto
+    original de Claude. Acá es donde eso se arregla.
+    """
+    changed = False
+    for row in patch or []:
+        try:
+            pos = int(row.get("id", -1))
+        except (TypeError, ValueError):
+            continue
+        if not (0 <= pos < len(clips)):
+            continue
+        clip = clips[pos]
+
+        fmt = normalize_format(row.get("format"))
+        if normalize_format(clip.get("formato")) != fmt:
+            clip["formato"] = fmt
+            changed = True
+
+        caps = dict(clip.get("captions") or {})
+        for plat, texto in (row.get("captions") or {}).items():
+            texto = str(texto)
+            if caps.get(plat, "") != texto:
+                caps[plat] = texto
+                changed = True
+        clip["captions"] = caps
     return changed
 
 
@@ -1662,74 +1740,56 @@ if st.session_state.stage == "captioned":
         go_back()
         st.rerun()
 
-    for clip in final_clips:
-        caps = clip.get("captions", {})
-        dur  = int(clip["end"] - clip["start"])
-        m, s_ = divmod(dur, 60)
+    _pub = clip_publish(
+        clips=clips_to_publish(final_clips),
+        formats=gallery_formats(),
+        platforms=_PUBLISH_PLATFORMS,
+        key=f"publish_{video_info['video_id']}",
+    )
 
-        with st.expander(
-            f"Clip {clip['index']} · **{clip['title']}** · {m}:{s_:02d} · _{clip['type']}_",
-            expanded=True,
-        ):
-            col_vid, col_caps = st.columns([1, 2])
+    _sel_pos = 0
+    if _pub:
+        if apply_publish(_pub.get("clips"), final_clips):
+            save_state()
+        try:
+            _sel_pos = int(_pub.get("selected") or 0)
+        except (TypeError, ValueError):
+            _sel_pos = 0
 
-            with col_vid:
-                vid_path = clip.get("output_path", clip.get("clip_path"))
-                if vid_path and Path(str(vid_path)).exists():
-                    st.video(str(vid_path))
-                st.caption(clip.get("reason", ""))
+        # Igual que en la galería: la acción viaja en el valor y Streamlit lo
+        # devuelve en cada rerun, así que el nonce es lo que evita re-renderizar
+        # en loop.
+        _act = _pub.get("action") or {}
+        if (_act.get("kind") == "rerender"
+                and _pub.get("nonce") != st.session_state.get("_publish_nonce")):
+            st.session_state["_publish_nonce"] = _pub.get("nonce")
+            _pos = int(_act.get("id", -1))
+            if 0 <= _pos < len(final_clips):
+                _clip = final_clips[_pos]
+                with st.status(f"Re-renderizando clip {_clip.get('index', _pos + 1)}…",
+                               expanded=True) as _s:
+                    try:
+                        _out_dir = config.OUTPUT_DIR / video_info["video_id"]
+                        _re = render_clips([_clip], _out_dir, video_info["video_id"])
+                        if _re:
+                            _clip.update(_re[0])  # nuevo output_path/cover_path
+                            save_state()
+                        _s.update(label="✅ Clip re-renderizado", state="complete")
+                        st.rerun()
+                    except Exception as _e:
+                        _s.update(label="❌ Error al re-renderizar", state="error")
+                        st.error(f"Re-render: {_e}")
 
-                # Cambiar el formato acá y re-renderizar: si ves el clip ya
-                # armado y el recorte no era el que querías, no hay que volver
-                # a cortar nada (el corte es el mismo para todos los formatos).
-                format_picker(clip, f"p5fmt_{clip['index']}")
-                st.caption("Cambiá el formato y tocá **Re-renderizar** — no hace "
-                           "falta volver a cortar.")
-                clip_framing_fragment(clip)
+    # El encuadre manual se queda en Streamlit: saca frames del clip en el
+    # servidor y los dibuja, que es justo lo que el componente no puede hacer.
+    if 0 <= _sel_pos < len(final_clips):
+        _sel_clip = final_clips[_sel_pos]
+        if config.crops(normalize_format(_sel_clip.get("formato"))):
+            st.caption(f"Encuadre del clip {_sel_clip.get('index', _sel_pos + 1)} — "
+                       "después de ajustarlo, tocá **Re-renderizar este clip**.")
+            clip_framing_fragment(_sel_clip)
 
-                # Re-render de ESTE clip (útil tras ajustar encuadre/formato).
-                if st.button("🔄 Re-renderizar este clip", key=f"rerender_{clip['index']}"):
-                    with st.status(f"Re-renderizando clip {clip['index']}…", expanded=True) as _s:
-                        try:
-                            out_dir = config.OUTPUT_DIR / video_info["video_id"]
-                            re = render_clips([clip], out_dir, video_info["video_id"])
-                            if re:
-                                clip.update(re[0])  # nuevo output_path/cover_path
-                                save_state()
-                            _s.update(label="✅ Clip re-renderizado", state="complete")
-                            st.rerun()
-                        except Exception as e:
-                            _s.update(label="❌ Error al re-renderizar", state="error")
-                            st.session_state["_last_error"] = f"Re-render: {e}"
-
-            with col_caps:
-                tab_tt, tab_ig, tab_yt = st.tabs(["TikTok", "Instagram", "YouTube Shorts"])
-
-                with tab_tt:
-                    tt = caps.get("tiktok", "")
-                    st.text_area(
-                        "TikTok", tt, height=200,
-                        key=f"tt_{clip['index']}", label_visibility="collapsed"
-                    )
-                    copy_btn("📋 Copiar TikTok", tt, f"cp_tt_{clip['index']}")
-
-                with tab_ig:
-                    ig = caps.get("instagram", "")
-                    st.text_area(
-                        "Instagram", ig, height=200,
-                        key=f"ig_{clip['index']}", label_visibility="collapsed"
-                    )
-                    copy_btn("📋 Copiar Instagram", ig, f"cp_ig_{clip['index']}")
-
-                with tab_yt:
-                    yt = caps.get("youtube", "")
-                    st.text_area(
-                        "YouTube", yt, height=140,
-                        key=f"yt_{clip['index']}", label_visibility="collapsed"
-                    )
-                    copy_btn("📋 Copiar YouTube Shorts", yt, f"cp_yt_{clip['index']}")
-
-        st.divider()
+    st.divider()
 
     # CSV download
     csv_str  = build_csv(final_clips, video_info)

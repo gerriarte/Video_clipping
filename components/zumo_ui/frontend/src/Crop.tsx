@@ -6,8 +6,8 @@
  * deja de ser a ciegas.
  */
 import React from "react";
-import type { FormatDef, Shot } from "./types";
-import type { Tokens } from "./ui";
+import type { FormatDef } from "./types";
+import type { Tokens } from "./theme";
 
 export interface Box {
   /** Todo en fracción del ancho/alto de la foto (0–1). */
@@ -62,13 +62,14 @@ export function cropBoxes(
 interface OverlayProps {
   id: number;
   fmt: FormatDef | undefined;
-  shot: Shot | null;
+  /** Posicion horizontal de cada cara detectada (0-1); vacio = centrado. */
+  centersX: number[];
   sourceAspect: number;
   t: Tokens;
 }
 
-export const CropOverlay: React.FC<OverlayProps> = ({ id, fmt, shot, sourceAspect, t }) => {
-  const boxes = cropBoxes(fmt, sourceAspect, shot?.centersX || []);
+export const CropOverlay: React.FC<OverlayProps> = ({ id, fmt, centersX, sourceAspect, t }) => {
+  const boxes = cropBoxes(fmt, sourceAspect, centersX || []);
   if (!boxes.length) {
     return (
       <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>

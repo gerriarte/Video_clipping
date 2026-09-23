@@ -1,8 +1,8 @@
 /** Una tarjeta = un clip. React puro: props y callbacks, nada de host. */
 import React, { useRef, useState } from "react";
 import type { Clip, FormatDef } from "./types";
-import { CropOverlay, FormatGlyph } from "./Crop";
-import { clock, dur, type Tokens } from "./ui";
+import { CropOverlay, FormatGlyph } from "../Crop";
+import { clock, dur, type Tokens } from "../theme";
 
 export interface CardProps {
   clip: Clip;
@@ -79,7 +79,7 @@ export const ClipCard: React.FC<CardProps> = ({
             ) : (
               <div style={{ ...center, color: t.sub, fontSize: 12 }}>sin fotos del tramo</div>
             )}
-            <CropOverlay id={clip.id} fmt={fmt} shot={shot} sourceAspect={sourceAspect} t={t} />
+            <CropOverlay id={clip.id} fmt={fmt} centersX={shot?.centersX || []} sourceAspect={sourceAspect} t={t} />
 
             <button
               onClick={() => onChange(clip.id, { selected: !clip.selected }, true)}

@@ -7,7 +7,7 @@
  */
 import { Streamlit, RenderData } from "streamlit-component-lib";
 import type { Host, HostPayload } from "./bridge";
-import type { GalleryArgs, Theme } from "./types";
+import type { Theme } from "./types";
 
 export function createStreamlitHost(): Host {
   return {
@@ -15,7 +15,7 @@ export function createStreamlitHost(): Host {
       const handler = (event: Event) => {
         const data = (event as CustomEvent<RenderData>).detail;
         cb({
-          args: data.args as GalleryArgs,
+          args: data.args,
           theme: data.theme as unknown as Theme | undefined,
         });
       };

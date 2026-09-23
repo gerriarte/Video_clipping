@@ -6,6 +6,10 @@
  * vez de un componente de Streamlit, este archivo no cambia.
  */
 
+import type { FormatDef, Theme } from "../types";
+
+export type { FormatDef, Theme };
+
 /** Una foto del tramo, con su etiqueta ("arranque · 1:37"). */
 export interface Thumb {
   url: string;
@@ -47,29 +51,6 @@ export interface Clip {
   thumbs: Thumb[];
   /** null mientras no se analizó la toma. */
   shot: Shot | null;
-}
-
-export interface FormatDef {
-  key: string;
-  /** Nombre largo ("9:16 vertical"). */
-  label: string;
-  /** Nombre corto para el botón ("9:16"). */
-  short: string;
-  /** Si el formato recorta algo (habilita seguir al hablante / seguir la toma). */
-  crop: boolean;
-  /** Relación de aspecto de la salida (ancho/alto). */
-  aspect: number;
-  /** El recorte se mueve solo dentro del clip (habilita "seguir al hablante"). */
-  autoLayout: boolean;
-}
-
-export interface Theme {
-  base: "light" | "dark";
-  primaryColor: string;
-  backgroundColor: string;
-  secondaryBackgroundColor: string;
-  textColor: string;
-  font: string;
 }
 
 /** Lo que el host le pasa a la galería. */

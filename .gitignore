@@ -38,7 +38,7 @@ episodios/*/whisper.cpp/
 # Clip local para previsualizar en Remotion Studio (hardlink a clips/)
 remotion/public/
 components/clip_editor/frontend/node_modules/
-components/clip_gallery/frontend/node_modules/
+components/zumo_ui/frontend/node_modules/
 *.tsbuildinfo
 
 # Custom Streamlit component (Track 2): los assets COMPILADOS deben versionarse
@@ -46,8 +46,8 @@ components/clip_gallery/frontend/node_modules/
 # excluiría; esta negación los rescata. Ver docs/DEPLOYMENT.md.
 !components/clip_editor/frontend/build/
 !components/clip_editor/frontend/build/**
-!components/clip_gallery/frontend/build/
-!components/clip_gallery/frontend/build/**
+!components/zumo_ui/frontend/build/
+!components/zumo_ui/frontend/build/**
 
 # Generated outputs
 *.csv

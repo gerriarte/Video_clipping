@@ -397,7 +397,7 @@ da más material para elegir en el editor. Cambio chico, encaja en el Track 2.
 
 ---
 
-## Track 4 — Galería de clips en React (UI)   ✅ FASE 1 (2026-09-23)
+## Track 4 — La UI en React, pantalla por pantalla   ✅ FASES 1 y 2 (2026-09-23)
 
 > Decisión: la UI se mueve a React **por pantalla**, empezando por la que más
 > dolía. El componente se escribe contra una interfaz de props/callbacks y toda
@@ -473,13 +473,71 @@ se agrega `bridge.http.ts` y se cambia una línea en `main.tsx`.
    último nonce consumido se guarda con el estado, así tampoco se repite la
    acción al reiniciar la app.
 
+### Fase 2 — El Paso 5 deja de ser una lista infinita   ✅ (2026-09-23)
+
+El Paso 5 dibujaba los 20 clips en expanders **abiertos a la vez**: 27.982 px de
+alto (31,5 pantallas), 297 botones y 20 `<video>` cargados al mismo tiempo. Ahora
+es lista + detalle (`src/publish/`): la lista a la izquierda es el mapa del
+episodio (portada, número, duración, formato, aviso de "sin render"), y a la
+derecha hay un solo clip abierto con su video, su formato y sus tres textos.
+
+| | Antes | Ahora |
+|---|---|---|
+| Alto de la página | 27.982 px · 31,5 pantallas | **2.457 px · 2,6 pantallas** |
+| Videos cargados | 20 | **1** |
+| Botones que dibuja Streamlit | 297 | **17** |
+
+**El bug que estaba escondido ahí:** los captions se dibujaban con
+`st.text_area(...)` y **nunca se leían de vuelta**. Editar un caption no hacía
+nada: el CSV y Postiz seguían mandando el texto original de Claude. Ahora los
+textos son del componente y `apply_publish` los vuelca sobre el clip. Verificado
+escribiendo en el textarea y leyendo `.pipeline_state.json`.
+
+**Copiar al portapapeles.** `navigator.clipboard.writeText` dentro de un iframe
+sin foco **no resuelve ni rechaza: se cuelga**, así que un aviso de "copiado"
+colgado de ese `await` no llegaba nunca. El camino es el `textarea` +
+`execCommand("copy")`, que es sincrónico y devuelve si funcionó; la API moderna
+queda de respaldo. Y si falla, el botón dice **"no se pudo"** en vez de mentir.
+Verificado con clic real de mouse: devuelve `true` y el botón dice "copiado".
+
+**Lo que se queda en Streamlit, a propósito:** el encuadre manual
+(`clip_framing_fragment`) saca frames del clip en el servidor y los dibuja, que
+es justo lo que el componente no puede hacer. Se dibuja debajo, para el clip que
+esté abierto — el componente informa cuál en `selected`.
+
+### La estructura, después de dos pantallas
+
+Un solo proyecto de frontend y un solo build; `screen` elige la pantalla.
+
+```
+components/zumo_ui/
+  __init__.py              clip_gallery(...) y clip_publish(...)
+  frontend/src/
+    bridge.ts              interfaz Host (subscribe / commit / setHeight / ready)
+    bridge.streamlit.ts    UNICO archivo que importa streamlit-component-lib
+    theme.ts  Crop.tsx  types.ts        compartidos
+    main.tsx               despacha por args.screen
+    gallery/               Paso 3
+    publish/               Paso 5
+```
+
+Se probó tener un proyecto npm por componente con el código común afuera: no va.
+La resolución de módulos de Node busca `node_modules` desde la carpeta del
+archivo hacia arriba, así que un `src/` compartido fuera del proyecto no
+encuentra ni `react`. Un proyecto con dos entradas HTML tampoco: Vite emite
+`../assets/...` para una entrada anidada y el server de componentes de Streamlit
+sirve una sola raíz. Una entrada y un `screen` en los props resuelve las dos
+cosas sin pelearse con nada.
+
 ### Lo que queda para las fases siguientes
 
-- **Paso 5 (31,5 pantallas)** es ahora el peor de la app: misma tarjeta, con los
-  captions en un panel lateral en vez de 20 expanders abiertos.
-- **Paso 4** puede reusar la tarjeta para el preview + encuadre.
-- `apply_gallery` / `clips_to_gallery` viven en `app.py` y por eso no tienen
-  test (nada de `app.py` lo tiene). Si se mueven a un módulo, son testeables.
+- **Paso 4** es el que queda: puede reusar la tarjeta de la galería para el
+  preview, y la lista + detalle del Paso 5 para el encuadre.
+- **Pasos 1 y 2** son formularios cortos; no urge.
+- `apply_gallery`, `clips_to_gallery`, `apply_publish` y `clips_to_publish` viven
+  en `app.py` y por eso no tienen test (nada de `app.py` lo tiene). Son el punto
+  donde un bug significa perder ediciones en silencio — justo lo que pasaba con
+  los captions. Moverlos a un módulo los hace testeables.
 - **El detector de caras no ve este set.** En el episodio de prueba, los 15
   tramos dan "sin caras el 100%" y la sugerencia sale `9:16-full` para todos,
   aunque las fotos tienen caras claras. Es el Haar de `segment_preview` contra
@@ -500,3 +558,4 @@ se agrega `bridge.http.ts` y se cambia una línea en `main.tsx`.
 | 2026-07-17 | Editor: React (plantilla oficial) + wavesurfer.js v7 (waveform + Regions) + edición de título/tipo dentro del componente. |
 | 2026-07-17 | Track 3 (animaciones): 3 overlays (hook / intro-outro / lower-third) como capa sobre el clip, con presets de parámetros (sin LLM), render en paralelo. Planificado, sin implementar. |
 | 2026-09-23 | La UI se mueve a React por pantalla. Empieza la galería de clips (Paso 3); el componente se escribe contra props/callbacks con el bridge de Streamlit aislado, para poder mudarlo a una API sin reescribirlo. |
+| 2026-09-23 | Un solo proyecto de frontend y un solo build para todas las pantallas; `screen` elige cuál montar. Un proyecto npm por componente no funciona (resolución de módulos), y varias entradas HTML tampoco (rutas de assets). |

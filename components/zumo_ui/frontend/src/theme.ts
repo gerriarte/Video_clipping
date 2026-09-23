@@ -1,4 +1,4 @@
-/** Tokens de estilo y helpers de formato. Sin React, sin host. */
+/** Tokens de estilo y helpers de tiempo, compartidos. Sin React, sin host. */
 import type { Theme } from "./types";
 
 export const FALLBACK_THEME: Theme = {
