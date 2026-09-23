@@ -47,7 +47,7 @@ try:
     from modules.downloader  import download_video, load_local_video
     from modules.analyzer    import parse_vtt, identify_clips, get_cues_for_clip, transcript_coverage
     from modules.clipper     import cut_clips
-    from modules.renderer    import render_clips, speaker_follow
+    from modules.renderer    import render_clips, speaker_follow, clip_aspect
     from modules.caption_gen import generate_all_captions
     from modules.transcriber import transcribe_video
     from modules.postiz      import PostizClient, build_posts_for_clip, maybe_upload_cover, to_utc_iso, PLATFORM_CAPTION_FIELD
@@ -56,6 +56,7 @@ try:
     from modules.media_server import MediaServer
     from modules.segment_preview import analyze_segment
     from components.clip_editor import clip_editor
+    from components.clip_gallery import clip_gallery
     CONFIG_OK    = True
     CONFIG_ERROR = None
 except EnvironmentError as e:
@@ -101,6 +102,12 @@ def _restore_paths(obj, path_keys=("video_path", "vtt_path", "clip_path", "outpu
 def save_state():
     data = {k: _paths_to_str(st.session_state[k])
             for k in ("stage", "source_mode", "video_info", "cues", "clips", "clipped", "final_clips")}
+    # El nonce de la última acción ya consumida en la galería viaja con el
+    # estado: si no, al reiniciar la app con la pestaña abierta Streamlit le
+    # reenvía al componente su último valor y la acción ("✂ Timeline") se
+    # vuelve a disparar sola en la sesión nueva, que no la recuerda.
+    if "_gallery_nonce" in st.session_state:
+        data["_gallery_nonce"] = st.session_state["_gallery_nonce"]
     _STATE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -298,27 +305,6 @@ def df_to_clips(df: pd.DataFrame, original: list) -> list:
     return result
 
 
-def merge_df_into_clips(df: pd.DataFrame, original: list) -> list:
-    """
-    Vuelca lo editado en la tabla sobre TODOS los clips (no solo los tildados).
-
-    Hace falta porque el panel de preview cambia el formato con botones, y cada
-    botón dispara un rerun: si no persistiéramos la tabla antes, se perderían los
-    títulos/tiempos que el usuario acababa de editar.
-    """
-    merged = []
-    for i, row in df.iterrows():
-        clip = original[i].copy()
-        clip["_selected"] = bool(row["✓"])
-        clip["title"]     = row["Título"]
-        clip["formato"]   = _LABEL_TO_KEY.get(row["Formato"], config.DEFAULT_FORMAT)
-        clip["start"]     = float(row["Inicio"])
-        clip["end"]       = float(row["Fin"])
-        clip["type"]      = row["Tipo"]
-        clip["reason"]    = row["Razón"]
-        merged.append(clip)
-    return merged
-
 
 # ── Preview del tramo antes de elegir el formato ──────────────────────────────
 # El formato se elige cuando el clip TODAVÍA no se cortó, así que sin esto la
@@ -338,27 +324,6 @@ def segment_analysis(clip: dict, info: dict) -> dict:
     return st.session_state[key]
 
 
-def shot_badge(analysis: dict) -> str:
-    """
-    Cómo es la toma, con el número que lo respalda.
-
-    Se muestra el PORCENTAJE del clip, no un "hay 2 personas" a secas: en un
-    episodio que alterna plano general y primer plano, el promedio es la única
-    respuesta honesta (y es la que decide el formato).
-    """
-    n    = analysis.get("samples", 0)
-    two  = analysis.get("two_shot_ratio", 0.0)
-    solo = analysis.get("solo_ratio", 0.0)
-    if not n:
-        return "🙈 sin análisis"
-    if analysis.get("mixed"):
-        return f"🔀 cambia de plano — 2 personas en el {two*100:.0f}% del clip"
-    if two >= 0.45:
-        return f"👥 2 personas en el {two*100:.0f}% del clip ({n} muestras)"
-    if analysis.get("empty_ratio", 0) >= 0.6:
-        return f"🖥 casi sin caras — plano abierto o pantalla ({n} muestras)"
-    return f"👤 1 persona en el {solo*100:.0f}% del clip ({n} muestras)"
-
 
 def segment_video_url(info: dict) -> str:
     """URL del video para el reproductor: proxy 480p si ya existe, si no el original."""
@@ -368,25 +333,6 @@ def segment_video_url(info: dict) -> str:
         src = proxy
     return get_media_server().url_for(src)
 
-
-def segment_player(url: str, start: float, end: float, height: int = 260) -> None:
-    """
-    Reproduce SOLO el tramo del video completo (sin cortar ni recodificar nada).
-
-    Se apoya en el mismo server con Range del editor de timeline: el navegador
-    pide únicamente los bytes de ese tramo, aunque el episodio pese varios GB.
-    """
-    st.components.v1.html(
-        f"""
-        <video controls preload="metadata" playsinline
-               style="width:100%;border-radius:8px;background:#000"
-               onloadedmetadata="this.currentTime={start:.2f}"
-               ontimeupdate="if(this.currentTime>{end:.2f}||this.currentTime<{start:.2f}-1)
-                             {{this.pause();this.currentTime={start:.2f}}}">
-          <source src="{url}#t={start:.2f},{end:.2f}" type="video/mp4">
-        </video>""",
-        height=height,
-    )
 
 
 def format_picker(clip: dict, key_prefix: str, suggested: str = "") -> None:
@@ -415,6 +361,155 @@ def format_picker(clip: dict, key_prefix: str, suggested: str = "") -> None:
             st.session_state.clips_editor_rev += 1
             save_state()
             st.rerun()
+
+
+# ── Galería de clips (componente custom) ──────────────────────────────────────
+# Reemplaza a la planilla + el panel de previews: cada clip es una tarjeta con
+# la foto del tramo y el recorte del formato dibujado encima. Ver
+# components/clip_gallery/.
+
+# Nombre corto para el botón de la tarjeta (el largo va en el tooltip).
+_FORMAT_SHORT = {
+    "9:16":      "9:16",
+    "9:16-full": "completo",
+    "1:1":       "1:1",
+    "16:9":      "16:9",
+    "split":     "split",
+}
+
+
+def get_preview_server():
+    """
+    Server HTTP de sesión para `clips/` (miniaturas de los tramos).
+
+    Va aparte del de `downloads/` a propósito: cada MediaServer sirve UNA raíz,
+    y ensancharla hasta la raíz del proyecto pondría el `.env` a un GET de
+    distancia.
+    """
+    srv = st.session_state.get("_preview_server")
+    if srv is None:
+        srv = MediaServer(config.CLIPS_DIR)  # puerto efímero
+        srv.start()
+        st.session_state["_preview_server"] = srv
+    return srv
+
+
+def source_aspect(info: dict) -> float:
+    """Aspecto del video fuente (cacheado en sesión). 16:9 si no se puede leer."""
+    key = f"_srcaspect_{info.get('video_id', '')}"
+    if key not in st.session_state:
+        st.session_state[key] = clip_aspect(info["video_path"])
+    return st.session_state[key]
+
+
+def gallery_formats() -> list:
+    """Los formatos, con lo que la tarjeta necesita para dibujar el recorte."""
+    return [
+        {
+            "key":        k,
+            "label":      p["label"],
+            "short":      _FORMAT_SHORT.get(k, p["label"]),
+            "crop":       bool(p.get("crop")),
+            "aspect":     p["width"] / p["height"],
+            "autoLayout": bool(p.get("auto_layout")),
+        }
+        for k, p in config.FORMAT_PRESETS.items()
+    ]
+
+
+def clips_to_gallery(clips: list, info: dict, analyses: dict) -> list:
+    """Arma el payload de la galería. `id` es la posición en la lista."""
+    srv = get_preview_server()
+    out = []
+    for pos, c in enumerate(clips):
+        a = analyses.get(pos) or {}
+        shot = None
+        if a.get("samples"):
+            shot = {
+                "samples":    a["samples"],
+                "twoShot":    a.get("two_shot_ratio", 0.0),
+                "solo":       a.get("solo_ratio", 0.0),
+                "empty":      a.get("empty_ratio", 0.0),
+                "mixed":      bool(a.get("mixed")),
+                "suggestion": a.get("suggestion", ""),
+                "centersX":   a.get("centers_x") or [],
+            }
+        out.append({
+            "id":            pos,
+            "title":         c.get("title", ""),
+            "start":         float(c["start"]),
+            "end":           float(c["end"]),
+            "type":          c.get("type", "insight"),
+            "reason":        c.get("reason", ""),
+            "selected":      bool(c.get("_selected", True)),
+            "format":        normalize_format(c.get("formato")),
+            "speakerFollow": speaker_follow(c),
+            "followShot":    bool(c.get("follow_shot")),
+            "thumbs":        [
+                {"url": srv.url_for(Path(f)), "label": lbl}
+                for f, lbl in (a.get("thumbs") or [])
+            ],
+            "shot":          shot,
+        })
+    return out
+
+
+# Campo de la galería → clave del clip. El encuadre manual (crop_*) NO está acá:
+# se edita en los Pasos 4 y 5 y la galería no debe pisarlo.
+_GALLERY_FIELDS = (
+    ("title",         "title"),
+    ("start",         "start"),
+    ("end",           "end"),
+    ("type",          "type"),
+    ("selected",      "_selected"),
+    ("format",        "formato"),
+    ("speakerFollow", "speaker_follow"),
+    ("followShot",    "follow_shot"),
+)
+
+
+def _gallery_current(clip: dict) -> dict:
+    """El estado actual del clip en el vocabulario de la galería."""
+    return {
+        "title":    clip.get("title", ""),
+        "start":    float(clip["start"]),
+        "end":      float(clip["end"]),
+        "type":     clip.get("type", "insight"),
+        "_selected": bool(clip.get("_selected", True)),
+        "formato":  normalize_format(clip.get("formato")),
+        "speaker_follow": speaker_follow(clip),
+        "follow_shot":    bool(clip.get("follow_shot")),
+    }
+
+
+def apply_gallery(patch: list, clips: list) -> bool:
+    """Vuelca lo editado en la galería sobre los clips. True si algo cambió."""
+    changed = False
+    for row in patch or []:
+        try:
+            pos = int(row.get("id", -1))
+        except (TypeError, ValueError):
+            continue
+        if not (0 <= pos < len(clips)):
+            continue
+        clip    = clips[pos]
+        current = _gallery_current(clip)
+        for src_key, field in _GALLERY_FIELDS:
+            if src_key not in row:
+                continue
+            val = row[src_key]
+            if field in ("start", "end"):
+                val = float(val)
+            elif field in ("_selected", "speaker_follow", "follow_shot"):
+                val = bool(val)
+            elif field == "formato":
+                val = normalize_format(val)
+            else:
+                val = str(val)
+            if current[field] != val:
+                clip[field] = val
+                changed = True
+    return changed
 
 
 # ── Encuadre manual por clip ──────────────────────────────────────────────────
@@ -1264,151 +1359,44 @@ if st.session_state.stage == "analyzed":
         go_back()
         st.rerun()
 
-    # Botones de selección rápida
-    col_sel, col_desel, col_edit, col_spacer = st.columns([1, 1, 1.4, 5])
-    if col_sel.button("☑ Todos", use_container_width=True):
-        for c in st.session_state.clips:
-            c["_selected"] = True
-    if col_desel.button("☐ Ninguno", use_container_width=True):
-        for c in st.session_state.clips:
-            c["_selected"] = False
-    if col_edit.button("✂️ Timeline", use_container_width=True,
-                       help="Ajustar estos cortes en el editor visual de timeline"):
-        st.session_state.stage = "editing"
-        save_state()
-        st.rerun()
+    st.caption("Elegí qué clips cortar y en qué formato.")
 
-    st.caption("Marcá los clips que querés cortar. Podés editar título, tiempos y tipo.")
+    _info = st.session_state.video_info
 
-    edited_df = st.data_editor(
-        clips_to_df(st.session_state.clips),
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "✓":       st.column_config.CheckboxColumn("Cortar", width="small"),
-            "Título":  st.column_config.TextColumn(width="large"),
-            "Formato": st.column_config.SelectboxColumn(
-                "Formato",
-                options=_FORMAT_OPTIONS,
-                width="medium",
-                required=True,
-            ),
-            "Inicio":  st.column_config.NumberColumn("Inicio (s)", format="%.1f", step=0.5),
-            "Fin":     st.column_config.NumberColumn("Fin (s)",    format="%.1f", step=0.5),
-            "Dur(s)":  st.column_config.NumberColumn("Duración", disabled=True),
-            "Tipo":    st.column_config.SelectboxColumn(
-                options=["insight", "advice", "humor", "stat", "story"]
-            ),
-            "Razón":   st.column_config.TextColumn(width="large"),
-        },
-        key=f"clips_editor_{st.session_state.clips_editor_rev}",
+    # Análisis de la toma de cada tramo. Está cacheado en sesión y en disco
+    # (clips/_previews/<tramo>/faces.json), así que el costo es solo la primera vez.
+    _analyses = {}
+    if _info:
+        with st.spinner("Analizando la toma de cada tramo (la primera vez tarda un poco)…"):
+            for _pos, _clip in enumerate(st.session_state.clips):
+                _analyses[_pos] = segment_analysis(_clip, _info)
+
+    _result = clip_gallery(
+        clips=clips_to_gallery(st.session_state.clips, _info, _analyses),
+        formats=gallery_formats(),
+        types=_EDITOR_TYPES,
+        video_url=segment_video_url(_info) if _info else "",
+        source_aspect=source_aspect(_info) if _info else 16 / 9,
+        key=f"gallery_{_info.get('video_id', '') if _info else 'none'}",
     )
 
-    # Persistimos lo editado antes de dibujar el preview: sus botones hacen rerun.
-    st.session_state.clips = merge_df_into_clips(edited_df, st.session_state.clips)
+    if _result:
+        if apply_gallery(_result.get("clips"), st.session_state.clips):
+            save_state()
+        # La acción viaja con la última tanda de datos, y Streamlit devuelve ese
+        # mismo valor en cada rerun: sin el nonce, "Timeline" se dispararía solo
+        # cada vez que la página se vuelve a dibujar.
+        if (_result.get("action") == "timeline"
+                and _result.get("nonce") != st.session_state.get("_gallery_nonce")):
+            st.session_state["_gallery_nonce"] = _result.get("nonce")
+            st.session_state.stage = "editing"
+            save_state()
+            st.rerun()
+
     approved = [c for c in st.session_state.clips if c.get("_selected", True)]
-
-    # ── Previsualizar el tramo antes de elegir formato ────────────────────────
-    _info = st.session_state.video_info
-    if _info and approved:
-        with st.expander("👁 Ver el video y elegir formato", expanded=False):
-            st.caption(
-                "Cada tramo se muestrea cada ~3 s para ver **cuánto tiempo** hay dos "
-                "personas en cuadro: si son la mayor parte del clip conviene ⧉ split "
-                "(una arriba, otra abajo); si hay una sola, 📱 9:16. La ⭐ es la "
-                "sugerencia y el porcentaje es la evidencia — el formato lo elegís vos."
-            )
-
-            with st.spinner("Analizando la toma de cada tramo (la primera vez tarda un poco)…"):
-                analyses = {}
-                for _pos, _clip in enumerate(st.session_state.clips):
-                    if _clip.get("_selected", True):
-                        analyses[_pos] = segment_analysis(_clip, _info)
-
-            _sugeridos = [
-                p for p, a in analyses.items()
-                if a["suggestion"] != normalize_format(st.session_state.clips[p].get("formato"))
-            ]
-            _n_sug = len(_sugeridos)
-            if _n_sug and st.button(
-                "⭐ Aplicar el formato sugerido" if _n_sug == 1
-                else f"⭐ Aplicar los {_n_sug} formatos sugeridos",
-                key="apply_all_suggested",
-            ):
-                for p in _sugeridos:
-                    st.session_state.clips[p]["formato"] = analyses[p]["suggestion"]
-                st.session_state.clips_editor_rev += 1
-                save_state()
-                st.rerun()
-
-            for _pos, _analysis in analyses.items():
-                _clip = st.session_state.clips[_pos]
-                _m, _s = divmod(int(_clip["end"] - _clip["start"]), 60)
-                st.markdown(
-                    f"**{_clip['title']}** · {shot_badge(_analysis)} · {_m}:{_s:02d} "
-                    f"({_clip['start']:.0f}s → {_clip['end']:.0f}s)"
-                )
-
-                _c_img, _c_ctrl = st.columns([2, 1.4])
-                with _c_img:
-                    _thumbs = _analysis.get("thumbs") or []
-                    if _thumbs:
-                        _fcols = st.columns(len(_thumbs))
-                        for _fi, (_frame, _label) in enumerate(_thumbs):
-                            with _fcols[_fi]:
-                                st.image(str(_frame), width="stretch", caption=_label)
-                    else:
-                        st.caption("⚠️ No se pudieron extraer fotos de este tramo.")
-                    # El server HTTP se levanta recién si alguien pide ver el video.
-                    if st.toggle("▶ Ver el tramo en video", key=f"segplay_{_pos}"):
-                        segment_player(
-                            segment_video_url(_info), _clip["start"], _clip["end"]
-                        )
-
-                with _c_ctrl:
-                    st.caption(
-                        f"Formato actual: **{_FORMAT_LABELS[normalize_format(_clip.get('formato'))]}**"
-                        f"  ·  sugerido: **{_FORMAT_LABELS[_analysis['suggestion']]}**"
-                    )
-                    format_picker(_clip, f"segfmt_{_pos}", _analysis["suggestion"])
-
-                    # Seguir la toma: solo tiene sentido si el formato recorta
-                    # (16:9 y "9:16 completo" muestran el plano entero).
-                    if config.crops(normalize_format(_clip.get("formato"))):
-                        if config.FORMAT_PRESETS[
-                            normalize_format(_clip.get("formato"))
-                        ].get("auto_layout"):
-                            _sfollow = st.checkbox(
-                                "🎥 Seguir al hablante",
-                                value=speaker_follow(_clip),
-                                key=f"spkfollow_{_pos}_{st.session_state.clips_editor_rev}",
-                                help="El recorte se desplaza para acompañar a quien "
-                                     "habla. Apagado, el plano queda quieto en la "
-                                     "posición media de la cara.",
-                            )
-                            if _sfollow != speaker_follow(_clip):
-                                _clip["speaker_follow"] = _sfollow
-                                save_state()
-                        _follow = st.checkbox(
-                            "🔀 Seguir la toma",
-                            value=bool(_clip.get("follow_shot")),
-                            key=f"follow_{_pos}_{st.session_state.clips_editor_rev}",
-                            help="El recorte cambia dentro del clip: split mientras "
-                                 "están los dos en cuadro y recorte cerrado cuando la "
-                                 "cámara va a uno solo. Las dimensiones no cambian. "
-                                 "Se combina con el seguimiento del hablante.",
-                        )
-                        if _follow != bool(_clip.get("follow_shot")):
-                            _clip["follow_shot"] = _follow
-                            save_state()
-                        if _analysis.get("mixed") and not _follow:
-                            st.caption("↑ este clip alterna planos: acá se nota")
-
-                st.divider()
-
     n_sel = len(approved)
-    st.info(f"**{n_sel} de {total_clips} clips seleccionados** para cortar"
-            + ("" if n_sel else " — seleccioná al menos uno para continuar"))
+    if not n_sel:
+        st.warning("Seleccioná al menos un clip para continuar.")
 
     # ── Cómo cortar (ajustes guiados por el audio) ────────────────────────────
     col_snap, col_jump = st.columns(2)

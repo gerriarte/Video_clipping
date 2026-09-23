@@ -397,6 +397,97 @@ da más material para elegir en el editor. Cambio chico, encaja en el Track 2.
 
 ---
 
+## Track 4 — Galería de clips en React (UI)   ✅ FASE 1 (2026-09-23)
+
+> Decisión: la UI se mueve a React **por pantalla**, empezando por la que más
+> dolía. El componente se escribe contra una interfaz de props/callbacks y toda
+> la atadura a Streamlit vive en un solo archivo, para que la mudanza a una API
+> HTTP sea cambiar el bridge y no reescribir la pantalla.
+
+### El problema, medido sobre un episodio real
+
+Sobre *Automatización con IA* (78:48, 15 clips analizados / 20 cortados):
+
+| Pantalla | Antes |
+|---|---|
+| Paso 3 con el panel de formato abierto | **6.664 px = 7,5 pantallas** de scroll, 45 miniaturas; al abrirlo Chrome dejó de responder >30 s |
+| Paso 5 (captions) | 27.982 px = **31,5 pantallas**, 297 botones, **20 `<video>` cargados a la vez** |
+| Tabla del Paso 3 | tiempos en segundos decimales (`97.1 → 163.4`), títulos y razones truncados |
+
+El diagnóstico de fondo: la app era un formulario de una columna que crece
+linealmente con la cantidad de clips, con el texto al frente y la evidencia
+visual escondida detrás de un expander.
+
+### Lo que hay ahora
+
+`components/clip_gallery/` reemplaza, en el Paso 3, a la planilla + el panel
+"👁 Ver el video y elegir formato" + los botones de selección rápida.
+
+- **Una tarjeta por clip**: foto del tramo, timecode (`1:37 → 2:43`), duración,
+  tipo, título editable en línea, la evidencia del análisis con su barra, los 5
+  formatos y los toggles de seguimiento.
+- **El recorte, dibujado sobre la foto** (`Crop.tsx`). Es el cambio que hace
+  intuitiva la elección: el marco muestra qué se queda el formato y lo de afuera
+  va apagado. El `split` dibuja los dos recortes, ubicados en `centers_x` si el
+  análisis los tiene. Los formatos que no recortan muestran "plano completo".
+- **Iconos dibujados, no emojis.** Cada formato es un rectángulo con su
+  proporción real: los emojis (📱 ⬛ 🖥 ⧉) se veían distinto en cada máquina y
+  rompían la altura de la fila de botones.
+- **El video no se precarga**: las miniaturas son `loading="lazy"` y el `<video>`
+  del tramo se monta recién al tocar ▶.
+
+| Pantalla | Antes | Ahora |
+|---|---|---|
+| Paso 3 (alto de página) | 6.664 px · 7,5 pantallas | **2.175 px · 2,4 pantallas** |
+| Botones que dibuja Streamlit | 244 | **10** |
+| Videos precargados | — | **0** |
+
+### El bridge (lo que hace barata la mudanza a una API)
+
+```
+frontend/src/
+  types.ts              contrato (sin React, sin host)
+  bridge.ts             interfaz Host: subscribe / commit / setHeight / ready
+  bridge.streamlit.ts   UNICO archivo que importa streamlit-component-lib
+  ClipGallery.tsx       React puro: props y callbacks
+  ClipCard.tsx  Crop.tsx  ui.ts
+  main.tsx              elige la implementación del Host
+```
+
+**Regla:** si `streamlit-component-lib` aparece importado fuera de
+`bridge.streamlit.ts`, la mudanza dejó de ser gratis. El día que exista la API,
+se agrega `bridge.http.ts` y se cambia una línea en `main.tsx`.
+
+### Dos trampas del modelo de Streamlit, y cómo quedaron resueltas
+
+1. **La carrera del eco.** Cada commit del componente dispara un rerun, y la
+   respuesta del host llega *después*. Con dos clics seguidos, el eco del primero
+   pisaba al segundo — se perdían cambios. La galería ahora espera ver de vuelta
+   exactamente lo que mandó (`pendingRef`) antes de volver a aceptar datos de
+   afuera. Verificado: 4 clics a 60 ms de distancia, los 4 llegan al disco.
+2. **El nonce que se repite.** Las acciones que no ejecuta la galería (abrir el
+   editor de timeline) viajan en el valor, y Streamlit devuelve ese mismo valor
+   en cada rerun; hace falta un nonce para no dispararlas dos veces. Si el
+   contador arrancara en 0, al remontarse el componente repetiría un nonce ya
+   consumido y la acción quedaría ignorada: se siembra con `Date.now()`. El
+   último nonce consumido se guarda con el estado, así tampoco se repite la
+   acción al reiniciar la app.
+
+### Lo que queda para las fases siguientes
+
+- **Paso 5 (31,5 pantallas)** es ahora el peor de la app: misma tarjeta, con los
+  captions en un panel lateral en vez de 20 expanders abiertos.
+- **Paso 4** puede reusar la tarjeta para el preview + encuadre.
+- `apply_gallery` / `clips_to_gallery` viven en `app.py` y por eso no tienen
+  test (nada de `app.py` lo tiene). Si se mueven a un módulo, son testeables.
+- **El detector de caras no ve este set.** En el episodio de prueba, los 15
+  tramos dan "sin caras el 100%" y la sugerencia sale `9:16-full` para todos,
+  aunque las fotos tienen caras claras. Es el Haar de `segment_preview` contra
+  el fondo verde/mural del set, no la galería — pero ahora se ve de un vistazo,
+  que es justamente para lo que sirve mostrar la evidencia.
+
+---
+
 ## Registro de decisiones
 
 | Fecha | Decisión |
@@ -408,3 +499,4 @@ da más material para elegir en el editor. Cambio chico, encaja en el Track 2.
 | 2026-07-17 | Editor visual de timeline como componente custom, para independizar el pipeline de Claude. |
 | 2026-07-17 | Editor: React (plantilla oficial) + wavesurfer.js v7 (waveform + Regions) + edición de título/tipo dentro del componente. |
 | 2026-07-17 | Track 3 (animaciones): 3 overlays (hook / intro-outro / lower-third) como capa sobre el clip, con presets de parámetros (sin LLM), render en paralelo. Planificado, sin implementar. |
+| 2026-09-23 | La UI se mueve a React por pantalla. Empieza la galería de clips (Paso 3); el componente se escribe contra props/callbacks con el bridge de Streamlit aislado, para poder mudarlo a una API sin reescribirlo. |
