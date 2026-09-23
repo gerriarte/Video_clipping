@@ -1,7 +1,7 @@
 {
-  "name": "zumo-remotion",
+  "name": "clip-studio-remotion",
   "version": "1.0.0",
-  "description": "Remotion compositions para Zumo Streaming clips",
+  "description": "Composiciones de Remotion: el render de clips de Clip Studio",
   "scripts": {
     "start": "npx remotion studio",
     "build": "npx remotion render ClipComposition out/clip.mp4",

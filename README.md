@@ -71,7 +71,7 @@ cd remotion && npm install && cd ..
 unos 300 MB.
 
 **No hace falta compilar el frontend.** Los componentes React de la interfaz
-(`components/zumo_ui/`, `components/clip_editor/`) se versionan ya compilados;
+(`components/clip_ui/`, `components/clip_editor/`) se versionan ya compilados;
 Node solo es necesario para Remotion. Si vas a modificarlos, ver
 [Desarrollo](#desarrollo).
 
@@ -230,7 +230,7 @@ modules/
   peaks.py, proxy.py       Forma de onda y proxy 480p del editor
 
 components/
-  zumo_ui/                 Las pantallas en React (galería y publicación)
+  clip_ui/                 Las pantallas en React (galería y publicación)
   clip_editor/             El editor de timeline (wavesurfer.js)
 
 remotion/                  El proyecto Remotion del render de clips
@@ -242,8 +242,13 @@ docs/ROADMAP.md            Historia de decisiones y cómo se llegó acá
 docs/DEPLOYMENT.md         Notas de despliegue
 ```
 
-Carpetas y archivos que se crean solos y no se versionan: `downloads/`,
-`clips/`, `output/`, `.pipeline_state.json`, `.env`, `settings.json`.
+**Qué no está en el repositorio, a propósito:** este repo lleva el *proyecto*,
+no el contenido. No se versionan las carpetas de trabajo (`downloads/`,
+`clips/`, `output/`), ni la configuración de cada uno (`.env`, `settings.json`,
+`.pipeline_state.json`), ni **el material de los episodios** — la locución, el
+video y las fotos de referencia que van en `episodios/*/_entrada/`. Eso lo pone
+quien hace el episodio; el texto (`brief.md`, `guion.md`, las composiciones de
+referencia) sí se versiona, porque es la especificación y pesa nada.
 
 ---
 
@@ -261,8 +266,14 @@ están en `config.py`.
 | `OLLAMA_MODEL` | `qwen2.5:14b` | Modelo local |
 | `RENDER_CONCURRENCY` | 2 (1 con menos de 8 núcleos) | Clips que se renderizan a la vez. Cada uno levanta su Chromium: bajala si te quedás sin memoria. |
 | `SPEAKER_FOLLOW_DEFAULT` | `1` | Si el recorte sigue al hablante por defecto |
-| `ZUMO_MATERIAL_DIR` | `downloads/` | Dónde busca los videos locales |
-| `ZUMO_STATE_FILE` | `.pipeline_state.json` | Útil para levantar una instancia de prueba sin pisar la que estás usando |
+| `CLIP_STUDIO_MATERIAL_DIR` | `downloads/` | Dónde busca los videos locales |
+| `CLIP_STUDIO_STATE_FILE` | `.pipeline_state.json` | Útil para levantar una instancia de prueba sin pisar la que estás usando |
+| `CLIP_STUDIO_SETTINGS_FILE` | `settings.json` | Ídem, para la configuración |
+| `CLIP_STUDIO_ENV_FILE` | `.env` | Ídem, para las claves |
+
+Las cuatro últimas se llamaban `ZUMO_*` y ese nombre se sigue aceptando: si lo
+usás esperando apuntar a un archivo de prueba y te lo ignoráramos en silencio,
+la app escribiría sobre el archivo real.
 
 Parámetros que se editan en `config.py`: `TARGET_CLIPS` (10),
 `MIN_CLIP_SECONDS` (15), `MAX_CLIP_SECONDS` (60), `FORMAT_PRESETS` (las
@@ -280,10 +291,10 @@ cd remotion && npx tsc --noEmit  # typecheck del render
 Para tocar las pantallas React:
 
 ```bash
-cd components/zumo_ui/frontend
+cd components/clip_ui/frontend
 npm install
 npm run dev                      # servidor de Vite en :5174
-# y poner _RELEASE = False en components/zumo_ui/__init__.py
+# y poner _RELEASE = False en components/clip_ui/__init__.py
 npm run build                    # el build se commitea
 ```
 

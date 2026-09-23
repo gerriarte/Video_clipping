@@ -605,7 +605,7 @@ def _detect_with_haar(
 
     best_ratio, best_focus_x, best_time = 0.0, 0.5, None
     source_aspect = 16.0 / 9.0
-    tmp_dir = Path(tempfile.mkdtemp(prefix="zumo_layout_"))
+    tmp_dir = Path(tempfile.mkdtemp(prefix="clipstudio_layout_"))
     try:
         for i, t in enumerate(sample_times):
             frame_png = tmp_dir / f"f{i}.png"

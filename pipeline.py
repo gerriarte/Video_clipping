@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Zumo Streaming — Pipeline principal
+Clip Studio — pipeline por línea de comandos
 Descarga video de YouTube → identifica clips → corta → renderiza 9:16 → genera captions
 """
 
@@ -26,7 +26,7 @@ def run_pipeline(url: str, skip_render: bool = False) -> Path:
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     print(f"\n{'═'*55}")
-    print(f"  ZUMO STREAMING — PIPELINE")
+    print(f"  CLIP STUDIO — PIPELINE")
     print(f"  {timestamp}")
     print(f"{'═'*55}\n")
 
@@ -148,7 +148,7 @@ def main():
     # Sin UI donde configurar nada: si falta la key, que se sepa ya.
     config.require_llm()
     parser = argparse.ArgumentParser(
-        description="Zumo Streaming — Pipeline de clips virales desde YouTube"
+        description="Clip Studio — clips verticales a partir de un video largo"
     )
     parser.add_argument("url", help="URL del video de YouTube")
     parser.add_argument(

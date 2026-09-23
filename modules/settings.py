@@ -17,8 +17,26 @@ import re
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-SETTINGS_FILE = Path(os.environ.get("ZUMO_SETTINGS_FILE", BASE_DIR / "settings.json"))
-ENV_FILE = Path(os.environ.get("ZUMO_ENV_FILE", BASE_DIR / ".env"))
+
+
+def env_path(nombre: str, default: Path) -> Path:
+    """
+    Ruta de una variable de entorno, aceptando también el nombre viejo.
+
+    Las variables se llamaban `ZUMO_*` antes de que la herramienta se llamara
+    Clip Studio. Se siguen aceptando a propósito: alguien que use el nombre
+    viejo esperando apuntar a un archivo de prueba, y a quien lo ignoráramos en
+    silencio, terminaría escribiendo sobre el archivo real.
+    """
+    return Path(
+        os.environ.get(f"CLIP_STUDIO_{nombre}")
+        or os.environ.get(f"ZUMO_{nombre}")
+        or default
+    )
+
+
+SETTINGS_FILE = env_path("SETTINGS_FILE", BASE_DIR / "settings.json")
+ENV_FILE = env_path("ENV_FILE", BASE_DIR / ".env")
 
 # Si algo de esto aparece en el dict de settings, `save_settings` lo rechaza: es
 # la red que evita que una key termine en un archivo que se comparte. Al agregar

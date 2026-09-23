@@ -1,5 +1,5 @@
 """
-Zumo Streaming Pipeline — Configuración central
+Clip Studio — configuración central
 """
 
 import os
@@ -53,7 +53,9 @@ CLIPS_DIR     = BASE_DIR / "clips"
 
 # Dónde busca la app los videos para cargar desde disco. Se configura en Ajustes;
 # el default es donde ya caen las descargas.
-MATERIAL_DIR  = os.environ.get("ZUMO_MATERIAL_DIR", "") or str(BASE_DIR / "downloads")
+MATERIAL_DIR  = (os.environ.get("CLIP_STUDIO_MATERIAL_DIR")
+                 or os.environ.get("ZUMO_MATERIAL_DIR")     # nombre viejo
+                 or str(BASE_DIR / "downloads"))
 OUTPUT_DIR    = BASE_DIR / "output"
 REMOTION_DIR  = BASE_DIR / "remotion"
 MODELS_DIR    = BASE_DIR / "models"
@@ -147,18 +149,18 @@ def crops(fmt_key: str) -> bool:
     """Si el formato recorta (y por lo tanto se puede encuadrar a mano)."""
     return bool(FORMAT_PRESETS.get(fmt_key, {}).get("crop"))
 
-# ── Marca Zumo ───────────────────────────────────────────────────────────────
-ZUMO_CONTEXT = """
-Zumo Streaming es un canal de YouTube sobre Negocios, Tecnología, Marketing y temas afines.
-El tono es relajado pero profesional, orientado a profesionales y empresas latinoamericanas.
-
-Los hosts son:
-- David Guerrero: Diseñador de Marca y Gerente de MTM (Marca tu Marca)
-- Carolina Betancurt: Social Media Manager en MTM
-- Camila Garavito: Ventas y Gestión de Proyectos en MTM
-- Ger: Especialista en Marketing e Inteligencia Artificial
-
-El contenido mezcla conversación fluida con insights accionables para emprendedores y profesionales.
+# ── Contexto del canal ───────────────────────────────────────────────────────
+# Lo que el modelo sabe del canal cuando elige clips y escribe los textos. Lo
+# normal es que venga de la pantalla de configuración (Ajustes → datos del
+# canal); esto es solo el respaldo para cuando no hay nada cargado — por
+# ejemplo al correr `pipeline.py` sin haber abierto nunca la app.
+#
+# Deliberadamente genérico: el canal es de quien usa la herramienta, no de
+# quien la escribió.
+DEFAULT_CHANNEL_CONTEXT = """
+Un canal de video con conversaciones y entrevistas.
+El tono es natural y directo, sin locución impostada.
+El contenido mezcla charla fluida con ideas concretas y aplicables.
 """
 
 # ── API Key ───────────────────────────────────────────────────────────────────

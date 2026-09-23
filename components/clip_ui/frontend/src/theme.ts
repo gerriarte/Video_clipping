@@ -32,9 +32,9 @@ export interface Tokens {
  * Luminancia relativa de un color #rrggbb (WCAG). Devuelve 0–1.
  *
  * Hace falta porque el acento lo elige el tema del host: con el rojo de
- * Streamlit el texto blanco encima se lee, pero con el amarillo de Zumo
- * (#FFD000) da un contraste de 1,7:1 — ilegible. El color del texto se calcula,
- * no se hardcodea.
+ * Streamlit el texto blanco encima se lee, pero con un amarillo como el del
+ * tema (#FFD000) da un contraste de 1,7:1 — ilegible. El color del texto se
+ * calcula, no se hardcodea.
  */
 function luminance(hex: string): number {
   const m = /^#?([0-9a-f]{6})$/i.exec((hex || "").trim());

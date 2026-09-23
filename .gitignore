@@ -37,10 +37,29 @@ episodios/*/node_modules/
 episodios/*/out/
 episodios/*/build/
 episodios/*/whisper.cpp/
+
+# El MATERIAL de un episodio (lo que va en _entrada/): locución, video, fotos de
+# referencia. Es contenido, no proyecto — pesa, es distinto en cada episodio y
+# suele no ser redistribuible. El repo lleva el código y la plantilla; el
+# material lo pone quien hace el episodio (ver episodios/COMO-ENTREGAR.md).
+#
+# El texto sí se versiona: `brief.md`, `guion.md` y las composiciones de
+# referencia son la especificación del episodio y pesan nada.
+episodios/*/_entrada/**/*.mp3
+episodios/*/_entrada/**/*.wav
+episodios/*/_entrada/**/*.m4a
+episodios/*/_entrada/**/*.mp4
+episodios/*/_entrada/**/*.mov
+episodios/*/_entrada/**/*.mkv
+episodios/*/_entrada/**/*.png
+episodios/*/_entrada/**/*.jpg
+episodios/*/_entrada/**/*.jpeg
+episodios/*/_entrada/**/*.webp
+episodios/_archivo/**/*.zip
 # Clip local para previsualizar en Remotion Studio (hardlink a clips/)
 remotion/public/
 components/clip_editor/frontend/node_modules/
-components/zumo_ui/frontend/node_modules/
+components/clip_ui/frontend/node_modules/
 *.tsbuildinfo
 
 # Custom Streamlit component (Track 2): los assets COMPILADOS deben versionarse
@@ -48,8 +67,8 @@ components/zumo_ui/frontend/node_modules/
 # excluiría; esta negación los rescata. Ver docs/DEPLOYMENT.md.
 !components/clip_editor/frontend/build/
 !components/clip_editor/frontend/build/**
-!components/zumo_ui/frontend/build/
-!components/zumo_ui/frontend/build/**
+!components/clip_ui/frontend/build/
+!components/clip_ui/frontend/build/**
 
 # Generated outputs
 *.csv

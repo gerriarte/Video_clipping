@@ -55,7 +55,7 @@ def generate_captions(clip: dict, video_title: str, channel_context: str | None 
     clip_transcript = " ".join(s["text"] for s in subs) if subs else "(sin transcript disponible)"
     duration = clip["end"] - clip["start"]
 
-    ctx = channel_context or config.ZUMO_CONTEXT
+    ctx = channel_context or config.DEFAULT_CHANNEL_CONTEXT
     prompt = f"""{ctx}
 
 Estás creando captions para un clip de {duration:.0f} segundos del episodio "{video_title}".

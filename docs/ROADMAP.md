@@ -254,7 +254,7 @@ ve bien los cambios"*. Tres causas, tres arreglos:
 `format_picker` pasó a recibir el dict del clip (antes escribía en
 `st.session_state.clips[pos]`, lo que lo ataba al Paso 3).
 
-**Extra:** `_STATE_FILE` ahora respeta la variable de entorno `ZUMO_STATE_FILE`,
+**Extra:** `_STATE_FILE` ahora respeta la variable de entorno `ZUMO_STATE_FILE` (hoy `CLIP_STUDIO_STATE_FILE`),
 para poder levantar una instancia de prueba sin pisar el estado de la que estás
 usando.
 
@@ -807,7 +807,7 @@ una mano.
 Un solo proyecto de frontend y un solo build; `screen` elige la pantalla.
 
 ```
-components/zumo_ui/
+components/clip_ui/
   __init__.py              clip_gallery(...) y clip_publish(...)
   frontend/src/
     bridge.ts              interfaz Host (subscribe / commit / setHeight / ready)

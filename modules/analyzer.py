@@ -216,7 +216,7 @@ ZONAS YA PROCESADAS — NO las uses ni te solapés con ellas:
 Buscá clips ÚNICAMENTE en los intervalos de tiempo que quedan fuera de estas zonas.
 """
 
-    ctx = channel_context or config.ZUMO_CONTEXT
+    ctx = channel_context or config.DEFAULT_CHANNEL_CONTEXT
     prompt = f"""{ctx}
 
 Tenés el siguiente transcript del video "{video_title}" con timestamps en formato [HH:MM:SS.mmm].
@@ -397,7 +397,7 @@ def _refine_titles(clips: list[dict], cues: list[dict], channel_context: str | N
             serie = f" [SERIE: parte {clip['part']} de {clip['part_total']} del mismo tema]"
         sections.append(f"CLIP {i+1} ({ts}, {dur:.0f}s){serie}:\n{clip_text or '(sin transcript)'}")
 
-    ctx = channel_context or config.ZUMO_CONTEXT
+    ctx = channel_context or config.DEFAULT_CHANNEL_CONTEXT
     canal = ctx.splitlines()[0].split(" es ")[0].split("\n")[0].strip() if ctx else "este canal"
     prompt = f"""Tenés los siguientes fragmentos de transcript de clips de {canal}.
 Para cada clip generá:

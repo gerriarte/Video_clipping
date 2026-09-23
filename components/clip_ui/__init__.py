@@ -25,10 +25,10 @@ _DIR = os.path.dirname(os.path.abspath(__file__))
 
 if not _RELEASE:
     # Puerto distinto al de clip_editor (5173) para tener los dos a la vez.
-    _component_func = components.declare_component("zumo_ui", url="http://localhost:5174")
+    _component_func = components.declare_component("clip_ui", url="http://localhost:5174")
 else:
     _component_func = components.declare_component(
-        "zumo_ui", path=os.path.join(_DIR, "frontend", "build")
+        "clip_ui", path=os.path.join(_DIR, "frontend", "build")
     )
 
 

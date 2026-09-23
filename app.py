@@ -74,7 +74,7 @@ try:
         FORMAT_LABELS, LABEL_TO_KEY, FORMAT_OPTIONS, PUBLISH_PLATFORMS,
     )
     from components.clip_editor import clip_editor
-    from components.zumo_ui     import clip_gallery, clip_publish
+    from components.clip_ui     import clip_gallery, clip_publish
     CONFIG_OK    = True
     CONFIG_ERROR = None
 except EnvironmentError as e:
@@ -89,7 +89,7 @@ except ImportError:
 
 # ── Persistencia de estado en disco ──────────────────────────────────────────
 _STATE_FILE = Path(
-    os.environ.get("ZUMO_STATE_FILE") or (Path(__file__).parent / ".pipeline_state.json")
+    os.environ.get("CLIP_STUDIO_STATE_FILE") or os.environ.get("ZUMO_STATE_FILE") or (Path(__file__).parent / ".pipeline_state.json")
 )
 
 
@@ -141,13 +141,6 @@ def load_state():
 
 
 # ── Session state ─────────────────────────────────────────────────────────────
-_ZUMO_HOSTS = (
-    "David Guerrero: Diseñador de Marca y Gerente de MTM (Marca tu Marca)\n"
-    "Carolina Betancurt: Social Media Manager en MTM\n"
-    "Camila Garavito: Ventas y Gestión de Proyectos en MTM\n"
-    "Ger: Especialista en Marketing e Inteligencia Artificial"
-)
-
 DEFAULTS = {
     "stage":           "idle",
     "source_mode":     "youtube",
@@ -156,10 +149,13 @@ DEFAULTS = {
     "clips":           [],
     "clipped":         [],
     "final_clips":     [],
-    "ch_name":         "Zumo Streaming",
-    "ch_desc":         "Canal de YouTube sobre Negocios, Tecnología, Marketing y temas afines. Orientado a profesionales y empresas latinoamericanas.",
-    "ch_hosts":        _ZUMO_HOSTS,
-    "ch_tone":         "Relajado pero profesional, con insights accionables para emprendedores.",
+    # Vacíos a propósito: el canal lo carga cada usuario en la pantalla de
+    # configuración y queda en settings.json. Traer uno puesto desde el código
+    # significa que el modelo trabaja con el contexto de otro.
+    "ch_name":         "",
+    "ch_desc":         "",
+    "ch_hosts":        "",
+    "ch_tone":         "",
     "clips_editor_rev":    0,
     "last_dur_range":      (config.MIN_CLIP_SECONDS, config.MAX_CLIP_SECONDS),
     "extra_clips_pending": [],   # clips encontrados por "Buscar más", aún sin cortar
@@ -171,11 +167,29 @@ if "stage" not in st.session_state:
     load_state()
 
 
+# Dónde va a parar el estado al empezar de nuevo. Uno solo: el anterior se pisa.
+_STATE_BACKUP = _STATE_FILE.with_suffix(_STATE_FILE.suffix + ".bak")
+
+
 def reset():
+    """
+    Vuelve a cero. El estado anterior NO se borra: se guarda al lado.
+
+    Antes hacía `unlink()`. Empezar de nuevo es un clic, y del otro lado hay un
+    episodio entero de trabajo —qué clips, con qué títulos, formatos y textos—
+    que no está en ningún otro lado. Renombrarlo cuesta lo mismo y deja una
+    salida: `mv .pipeline_state.json.bak .pipeline_state.json`.
+    """
     for k in list(DEFAULTS.keys()):
         st.session_state.pop(k, None)
     if _STATE_FILE.exists():
-        _STATE_FILE.unlink()
+        try:
+            _STATE_BACKUP.unlink(missing_ok=True)
+            _STATE_FILE.rename(_STATE_BACKUP)
+        except OSError:
+            # Si no se puede renombrar (permisos, otro proceso), se deja estar:
+            # es preferible un estado viejo a perderlo.
+            pass
 
 
 def go_back():
@@ -1009,7 +1023,19 @@ def build_channel_context() -> str:
     hosts_block = "\n".join(
         f"- {h.strip()}" for h in hosts.splitlines() if h.strip()
     )
-    ctx = f"{name} es {desc}\nEl tono es {tone}."
+    # Sin datos cargados devuelve "", y quien llama cae a
+    # config.DEFAULT_CHANNEL_CONTEXT. Armar "  es .\nEl tono es ." sería
+    # mandarle ruido al modelo creyendo que le dimos contexto.
+    if not (name or desc or tone or hosts_block):
+        return ""
+    partes = []
+    if name or desc:
+        partes.append(f"{name or 'El canal'} es {desc}".strip())
+    if tone:
+        partes.append(f"El tono es {tone}")
+    ctx = ".\n".join(p.rstrip(".") for p in partes)
+    if ctx:
+        ctx += "."
     if hosts_block:
         ctx += f"\n\nLos hosts son:\n{hosts_block}"
     return ctx
@@ -1051,19 +1077,19 @@ st.markdown(
       }
 
       /* Encabezado propio. */
-      .zumo-head { display:flex; align-items:baseline; gap:.6rem; margin-bottom:1.1rem; }
-      .zumo-head b { font-size:1.45rem; font-weight:700; letter-spacing:-.02em; }
-      .zumo-head span { font-size:.82rem; opacity:.55; }
-      .zumo-head i { width:9px; height:9px; border-radius:2px; background:ACCENT_COLOR;
+      .cs-head { display:flex; align-items:baseline; gap:.6rem; margin-bottom:1.1rem; }
+      .cs-head b { font-size:1.45rem; font-weight:700; letter-spacing:-.02em; }
+      .cs-head span { font-size:.82rem; opacity:.55; }
+      .cs-head i { width:9px; height:9px; border-radius:2px; background:ACCENT_COLOR;
                      display:inline-block; transform:translateY(-2px); }
 
       /* Los pasos: dónde estás, sin gastar una pantalla en decirlo. */
-      .zumo-steps { display:flex; gap:0; margin:0 0 1.4rem; font-size:.78rem; }
-      .zumo-steps div { flex:1; padding:.42rem .6rem; border-top:2px solid rgba(255,255,255,.10);
+      .cs-steps { display:flex; gap:0; margin:0 0 1.4rem; font-size:.78rem; }
+      .cs-steps div { flex:1; padding:.42rem .6rem; border-top:2px solid rgba(255,255,255,.10);
                         color:rgba(255,255,255,.38); }
-      .zumo-steps div.done { border-top-color:rgba(255,255,255,.28); color:rgba(255,255,255,.55); }
-      .zumo-steps div.now  { border-top-color:ACCENT_COLOR; color:ACCENT_COLOR; font-weight:600; }
-      .zumo-steps b { display:block; font-weight:inherit; }
+      .cs-steps div.done { border-top-color:rgba(255,255,255,.28); color:rgba(255,255,255,.55); }
+      .cs-steps div.now  { border-top-color:ACCENT_COLOR; color:ACCENT_COLOR; font-weight:600; }
+      .cs-steps b { display:block; font-weight:inherit; }
     </style>
     """.replace("ACCENT_COLOR", ACCENT),
     unsafe_allow_html=True,
@@ -1084,8 +1110,8 @@ def header(stage: str) -> None:
     )
     canal = st.session_state.get("ch_name") or "Sin canal configurado"
     st.markdown(
-        f'<div class="zumo-head"><i></i><b>Clip Studio</b><span>{canal}</span></div>'
-        f'<div class="zumo-steps">{pasos}</div>',
+        f'<div class="cs-head"><i></i><b>Clip Studio</b><span>{canal}</span></div>'
+        f'<div class="cs-steps">{pasos}</div>',
         unsafe_allow_html=True,
     )
 
@@ -1136,7 +1162,7 @@ def setup_screen() -> None:
     # sobre las plantas al guardar. Es el mismo problema que el de `source_mode`.
     nombre = st.text_input(
         "Nombre del canal", value=st.session_state.get("ch_name", ""),
-        key="setup_ch_name", placeholder="Ej: Zumo Streaming",
+        key="setup_ch_name", placeholder="Ej: Café con Ideas",
     )
     desc = st.text_area(
         "¿De qué trata? ¿Para quién?", value=st.session_state.get("ch_desc", ""),
@@ -1281,8 +1307,20 @@ with st.sidebar:
         st.rerun()
     if st.session_state.stage != "idle":
         st.divider()
-        if st.button("↺ Empezar de nuevo", use_container_width=True, key="reset_side"):
-            reset()
+        # En dos pasos a propósito: está siempre a la vista y del otro lado hay
+        # un episodio entero de trabajo.
+        if st.session_state.get("_confirm_reset"):
+            st.caption("¿Seguro? Se descarta el episodio en curso.")
+            c_si, c_no = st.columns(2)
+            if c_si.button("Sí, empezar", use_container_width=True, key="reset_yes"):
+                st.session_state.pop("_confirm_reset", None)
+                reset()
+                st.rerun()
+            if c_no.button("No", use_container_width=True, key="reset_no"):
+                st.session_state.pop("_confirm_reset", None)
+                st.rerun()
+        elif st.button("↺ Empezar de nuevo", use_container_width=True, key="reset_side"):
+            st.session_state["_confirm_reset"] = True
             st.rerun()
 
 
@@ -2035,7 +2073,7 @@ if st.session_state.stage == "captioned":
         st.download_button(
             label="⬇️ Descargar CSV",
             data=csv_str,
-            file_name=f"zumo_{vid_id}_captions.csv",
+            file_name=f"clips_{vid_id}.csv",
             mime="text/csv",
             type="primary",
             use_container_width=True,

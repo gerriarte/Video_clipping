@@ -1,5 +1,5 @@
 /**
- * Tipos compartidos por las pantallas de la UI de Zumo.
+ * Tipos compartidos por las pantallas de Clip Studio.
  *
  * Lo propio de una pantalla vive en el `types.ts` de su carpeta; acá solo entra
  * lo que usan dos o más. Sin React, sin host.
