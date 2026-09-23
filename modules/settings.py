@@ -48,9 +48,11 @@ DEFAULTS = {
     "channel_desc": "",
     "channel_hosts": "",
     "channel_tone": "",
-    # Vacío = la carpeta de descargas del proyecto (config.MATERIAL_DIR, que es
-    # absoluta). Una ruta relativa acá dependería de desde dónde se lanzó la app.
+    # Vacíos = las carpetas del proyecto (config.MATERIAL_DIR / OUTPUT_DIR, que
+    # son absolutas). Una ruta relativa acá dependería de desde dónde se lanzó
+    # la app.
     "material_dir": "",
+    "output_dir": "",
     "llm_provider": "anthropic",
     "claude_model": "claude-sonnet-4-6",
     "ollama_model": "qwen2.5:14b",

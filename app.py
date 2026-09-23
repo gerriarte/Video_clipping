@@ -612,12 +612,25 @@ def source_aspect(info: dict) -> float:
 
 
 def get_output_server():
-    """Server HTTP de sesión para `output/` (clips renderizados y portadas)."""
-    srv = st.session_state.get("_output_server")
-    if srv is None:
-        srv = MediaServer(config.OUTPUT_DIR)  # puerto efímero
-        srv.start()
-        st.session_state["_output_server"] = srv
+    """
+    Server HTTP de sesión para la carpeta de salida.
+
+    Se cachea junto con la carpeta que está sirviendo: la de salida se puede
+    cambiar en Ajustes sin reiniciar, y un server apuntando a la carpeta
+    anterior devolvería 404 en todos los videos del Paso 5 sin decir por qué.
+    """
+    actual = str(config.OUTPUT_DIR)
+    guardado = st.session_state.get("_output_server")
+    if guardado and guardado[0] == actual:
+        return guardado[1]
+    if guardado:
+        try:
+            guardado[1].stop()
+        except Exception:
+            pass
+    srv = MediaServer(config.OUTPUT_DIR)  # puerto efímero
+    srv.start()
+    st.session_state["_output_server"] = (actual, srv)
     return srv
 
 
@@ -1128,6 +1141,7 @@ _CH_FIELDS = {
     "ch_hosts":     "channel_hosts",
     "ch_tone":      "channel_tone",
     "material_dir": "material_dir",
+    "output_dir":   "output_dir",
 }
 
 
@@ -1191,6 +1205,16 @@ def setup_screen() -> None:
         st.caption("⚠️ Esa carpeta no existe todavía.")
     else:
         st.caption(f"{len(find_videos(material))} videos encontrados.")
+
+    salida = st.text_input(
+        "Carpeta donde se guardan los clips terminados",
+        value=st.session_state.get("output_dir") or str(config.OUTPUT_DIR),
+        key="setup_output_dir",
+        help="El video renderizado, su portada y el CSV. Puede ser otro disco: "
+             "esto crece rápido.",
+    )
+    if salida and not Path(salida).is_dir():
+        st.caption("Todavía no existe; se crea al renderizar el primer clip.")
 
     st.divider()
     st.markdown("**¿Con qué modelo trabajás?**")
@@ -1256,6 +1280,7 @@ def setup_screen() -> None:
 
         st.session_state.ch_name  = nombre
         st.session_state.material_dir = material
+        st.session_state.output_dir   = salida
         st.session_state.ch_desc  = desc
         st.session_state.ch_hosts = hosts
         st.session_state.ch_tone  = tono
@@ -1266,6 +1291,7 @@ def setup_screen() -> None:
             "channel_hosts": hosts,
             "channel_tone":  tono,
             "material_dir":  material,
+            "output_dir":    salida,
             "llm_provider":  prov,
             "claude_model":  st.session_state.get("setup_claude_model") or config.CLAUDE_MODEL,
             "ollama_model":  st.session_state.get("setup_ollama_model") or config.OLLAMA_MODEL,
@@ -2067,6 +2093,12 @@ if st.session_state.stage == "captioned":
     # CSV download
     csv_str  = build_csv(final_clips, video_info)
     vid_id   = video_info["video_id"]
+
+    _carpeta = config.OUTPUT_DIR / vid_id
+    st.caption(
+        f"Los videos, las portadas y el CSV quedan en `{_carpeta}` "
+        "— se cambia en ⚙ Ajustes."
+    )
 
     col_dl2, col_spacer = st.columns([1, 3])
     with col_dl2:

@@ -180,14 +180,14 @@ def test_una_placa_sin_titulo_no_se_dibuja():
 
 
 def test_la_placa_de_apertura_viaja_con_su_titulo():
-    capas = for_render(_clip(overlays={"intro": {"on": True, "title": "Zumo Streaming"}}))
-    assert capas["intro"]["title"] == "Zumo Streaming"
+    capas = for_render(_clip(overlays={"intro": {"on": True, "title": "Canal de ejemplo"}}))
+    assert capas["intro"]["title"] == "Canal de ejemplo"
     assert "outro" not in capas          # la apagada no viaja
 
 
 def test_las_dos_placas_a_la_vez():
     capas = for_render(_clip(overlays={
-        "intro": {"on": True, "title": "Zumo"},
+        "intro": {"on": True, "title": "Canal"},
         "outro": {"on": True, "title": "Seguinos"},
     }))
     assert set(capas) == {"intro", "outro"}
@@ -214,7 +214,7 @@ def test_avisa_si_la_placa_de_apertura_se_come_al_gancho():
     from modules.overlays import collision
     aviso = collision(_clip(overlays={
         "hook":  {"on": True, "start": 0.5, "dur": 3.0},
-        "intro": {"on": True, "title": "Zumo", "dur": 2.0},
+        "intro": {"on": True, "title": "Canal", "dur": 2.0},
     }))
     assert aviso and "apertura" in aviso
 
@@ -223,5 +223,5 @@ def test_no_avisa_si_el_gancho_entra_despues_de_la_placa():
     from modules.overlays import collision
     assert collision(_clip(overlays={
         "hook":  {"on": True, "start": 2.5, "dur": 3.0},
-        "intro": {"on": True, "title": "Zumo", "dur": 2.0},
+        "intro": {"on": True, "title": "Canal", "dur": 2.0},
     })) is None

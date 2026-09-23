@@ -48,15 +48,33 @@ OLLAMA_NUM_CTX_ANALYZE = int(os.environ.get("OLLAMA_NUM_CTX_ANALYZE", "32768"))
 
 # ── Rutas base ───────────────────────────────────────────────────────────────
 BASE_DIR      = Path(__file__).parent
-DOWNLOADS_DIR = BASE_DIR / "downloads"
-CLIPS_DIR     = BASE_DIR / "clips"
+
+
+def _dir_env(nombre: str, default: Path) -> Path:
+    """
+    Una carpeta de trabajo, configurable por entorno.
+
+    Por default todo vive adentro del proyecto, que es cómodo para arrancar y
+    un problema cuando crece: en una instalación con uso real esto junta
+    decenas de GB de video en la misma carpeta que el código. Con estas
+    variables se manda a otro disco sin tocar nada más.
+    """
+    return Path(os.environ.get(f"CLIP_STUDIO_{nombre}") or default)
+
+
+# Los videos fuente que baja yt-dlp (o que se cargan desde disco).
+DOWNLOADS_DIR = _dir_env("DOWNLOADS_DIR", BASE_DIR / "downloads")
+# Los cortes intermedios de ffmpeg, antes de renderizar.
+CLIPS_DIR     = _dir_env("CLIPS_DIR", BASE_DIR / "clips")
 
 # Dónde busca la app los videos para cargar desde disco. Se configura en Ajustes;
 # el default es donde ya caen las descargas.
 MATERIAL_DIR  = (os.environ.get("CLIP_STUDIO_MATERIAL_DIR")
                  or os.environ.get("ZUMO_MATERIAL_DIR")     # nombre viejo
                  or str(BASE_DIR / "downloads"))
-OUTPUT_DIR    = BASE_DIR / "output"
+# Dónde quedan los clips terminados: el video renderizado, su portada y el CSV.
+# Es lo que el usuario se lleva, así que se configura en Ajustes.
+OUTPUT_DIR    = _dir_env("OUTPUT_DIR", BASE_DIR / "output")
 REMOTION_DIR  = BASE_DIR / "remotion"
 MODELS_DIR    = BASE_DIR / "models"
 
@@ -201,7 +219,8 @@ def apply_settings(data: dict) -> None:
     Los módulos leen `config.X` cada vez que trabajan, así que reasignar acá
     alcanza y no hace falta reiniciar la app.
     """
-    global LLM_PROVIDER, CLAUDE_MODEL, OLLAMA_MODEL, ANTHROPIC_API_KEY, MATERIAL_DIR
+    global LLM_PROVIDER, CLAUDE_MODEL, OLLAMA_MODEL, ANTHROPIC_API_KEY
+    global MATERIAL_DIR, OUTPUT_DIR
     if data.get("llm_provider") in ("anthropic", "ollama"):
         LLM_PROVIDER = data["llm_provider"]
     if data.get("claude_model"):
@@ -210,5 +229,7 @@ def apply_settings(data: dict) -> None:
         OLLAMA_MODEL = data["ollama_model"]
     if data.get("material_dir"):
         MATERIAL_DIR = data["material_dir"]
+    if data.get("output_dir"):
+        OUTPUT_DIR = Path(data["output_dir"])
     ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", ANTHROPIC_API_KEY)
 

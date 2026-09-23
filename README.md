@@ -266,7 +266,10 @@ están en `config.py`.
 | `OLLAMA_MODEL` | `qwen2.5:14b` | Modelo local |
 | `RENDER_CONCURRENCY` | 2 (1 con menos de 8 núcleos) | Clips que se renderizan a la vez. Cada uno levanta su Chromium: bajala si te quedás sin memoria. |
 | `SPEAKER_FOLLOW_DEFAULT` | `1` | Si el recorte sigue al hablante por defecto |
-| `CLIP_STUDIO_MATERIAL_DIR` | `downloads/` | Dónde busca los videos locales |
+| `CLIP_STUDIO_MATERIAL_DIR` | `downloads/` | Dónde busca los videos locales (también en Ajustes) |
+| `CLIP_STUDIO_OUTPUT_DIR` | `output/` | Dónde quedan los clips terminados (también en Ajustes) |
+| `CLIP_STUDIO_DOWNLOADS_DIR` | `downloads/` | Dónde bajan los videos de YouTube |
+| `CLIP_STUDIO_CLIPS_DIR` | `clips/` | Los cortes intermedios, antes de renderizar |
 | `CLIP_STUDIO_STATE_FILE` | `.pipeline_state.json` | Útil para levantar una instancia de prueba sin pisar la que estás usando |
 | `CLIP_STUDIO_SETTINGS_FILE` | `settings.json` | Ídem, para la configuración |
 | `CLIP_STUDIO_ENV_FILE` | `.env` | Ídem, para las claves |
@@ -278,6 +281,23 @@ la app escribiría sobre el archivo real.
 Parámetros que se editan en `config.py`: `TARGET_CLIPS` (10),
 `MIN_CLIP_SECONDS` (15), `MAX_CLIP_SECONDS` (60), `FORMAT_PRESETS` (las
 dimensiones de cada formato) y `MAX_OUTPUT_FPS` (60).
+
+### Dónde queda cada cosa
+
+Por defecto todo vive adentro de la carpeta del proyecto, lo cual es cómodo para
+arrancar y un problema cuando crece: en un uso real esto junta decenas de GB de
+video al lado del código.
+
+| Carpeta | Qué guarda |
+|---|---|
+| `downloads/` | Los videos fuente completos |
+| `clips/` | Los cortes intermedios de ffmpeg y las fotos del análisis |
+| `output/<video>/` | **Lo que te llevás**: el clip renderizado, su portada y el CSV |
+
+Las dos que importan —de dónde salen los videos y dónde quedan los terminados—
+se cambian en **⚙ Ajustes** sin reiniciar. Las otras dos, con las variables de
+entorno de la tabla de arriba. El Paso 5 muestra la ruta exacta de la carpeta
+del episodio.
 
 ---
 

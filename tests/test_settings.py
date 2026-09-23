@@ -31,9 +31,9 @@ def test_load_devuelve_los_defaults_si_no_hay_archivo(tmp_path):
 
 def test_load_completa_lo_que_falta(tmp_path):
     p = tmp_path / "settings.json"
-    p.write_text(json.dumps({"channel_name": "Zumo"}), encoding="utf-8")
+    p.write_text(json.dumps({"channel_name": "Canal"}), encoding="utf-8")
     s = load_settings(p)
-    assert s["channel_name"] == "Zumo"
+    assert s["channel_name"] == "Canal"
     assert s["llm_provider"] == DEFAULTS["llm_provider"]
 
 
@@ -45,29 +45,29 @@ def test_load_sobrevive_a_un_archivo_roto(tmp_path):
 
 def test_guardar_y_releer(tmp_path):
     p = tmp_path / "settings.json"
-    save_settings({"channel_name": "Zumo Streaming", "channel_tone": "Relajado"}, p)
+    save_settings({"channel_name": "Canal de ejemplo", "channel_tone": "Relajado"}, p)
     s = load_settings(p)
-    assert s["channel_name"] == "Zumo Streaming"
+    assert s["channel_name"] == "Canal de ejemplo"
     assert s["channel_tone"] == "Relajado"
 
 
 def test_guardar_ignora_claves_desconocidas(tmp_path):
     p = tmp_path / "settings.json"
-    save_settings({"channel_name": "Zumo", "cualquier_cosa": 1}, p)
+    save_settings({"channel_name": "Canal", "cualquier_cosa": 1}, p)
     assert "cualquier_cosa" not in json.loads(p.read_text(encoding="utf-8"))
 
 
 def test_guardar_rechaza_secretos(tmp_path):
     """settings.json se copia y se comparte; una key no puede terminar ahí."""
     with pytest.raises(ValueError, match="secreto"):
-        save_settings({"channel_name": "Zumo", "ANTHROPIC_API_KEY": "sk-ant-loquesea"},
+        save_settings({"channel_name": "Canal", "ANTHROPIC_API_KEY": "sk-ant-loquesea"},
                       tmp_path / "s.json")
 
 
 # ── .env ──────────────────────────────────────────────────────────────────────
 
 _ENV_EJEMPLO = """\
-# Configuración de Zumo
+# Configuración
 ANTHROPIC_API_KEY=vieja
 
 LLM_PROVIDER=anthropic
@@ -84,7 +84,7 @@ def test_upsert_reemplaza_sin_tocar_lo_demas(tmp_path):
     assert env_read("ANTHROPIC_API_KEY", p) == "nueva"
     assert env_read("OTRA_VARIABLE", p) == "no-me-toques"
     assert env_read("LLM_PROVIDER", p) == "anthropic"
-    assert "# Configuración de Zumo" in p.read_text(encoding="utf-8")
+    assert "# Configuración" in p.read_text(encoding="utf-8")
 
 
 def test_upsert_agrega_al_final_si_no_estaba(tmp_path):
@@ -148,3 +148,19 @@ def test_mask_de_una_key_corta_no_filtra_nada():
 def test_mask_de_vacio_es_vacio():
     assert mask_key("") == ""
     assert mask_key(None) == ""
+
+
+# ── Carpetas de trabajo ───────────────────────────────────────────────────────
+
+def test_las_carpetas_se_guardan_y_se_releen(tmp_path):
+    p = tmp_path / "settings.json"
+    save_settings({"material_dir": "E:/Material", "output_dir": "E:/Salida"}, p)
+    s = load_settings(p)
+    assert s["material_dir"] == "E:/Material"
+    assert s["output_dir"] == "E:/Salida"
+
+
+def test_las_carpetas_vacias_dejan_mandar_al_default():
+    """Vacío = las carpetas del proyecto, que son rutas absolutas."""
+    assert DEFAULTS["material_dir"] == ""
+    assert DEFAULTS["output_dir"] == ""
