@@ -1,4 +1,4 @@
-# Roadmap — Fast Video Clipping
+# Roadmap — Clip Studio
 
 Plan de evolución acordado para la app. Dos tracks independientes entre sí; se
 pueden construir en cualquier orden o en paralelo. Nada de esto está implementado

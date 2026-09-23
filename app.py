@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Zumo Streaming — Pipeline con UI de validación
+Clip Studio — clips verticales a partir de un video largo
 Ejecutar: streamlit run app.py
 """
 
@@ -35,7 +35,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 # ── Page config (debe ir primero) ─────────────────────────────────────────────
 st.set_page_config(
-    page_title="Fast Video Clipping",
+    page_title="Clip Studio",
     page_icon="🎬",
     layout="wide",
 )
@@ -1084,7 +1084,7 @@ def header(stage: str) -> None:
     )
     canal = st.session_state.get("ch_name") or "Sin canal configurado"
     st.markdown(
-        f'<div class="zumo-head"><i></i><b>Zumo · Clips</b><span>{canal}</span></div>'
+        f'<div class="zumo-head"><i></i><b>Clip Studio</b><span>{canal}</span></div>'
         f'<div class="zumo-steps">{pasos}</div>',
         unsafe_allow_html=True,
     )

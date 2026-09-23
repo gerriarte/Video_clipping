@@ -1,355 +1,412 @@
-# Zumo · Ediciones
+# Clip Studio
 
-Dos tracks independientes. Comparten repo, entorno de Python y Remotion;
-no comparten código ni se pisan.
+Convierte un video largo en clips verticales listos para publicar. Descarga el
+video, deja que Claude proponga los mejores momentos, los corta con ffmpeg, los
+recorta al hablante y los renderiza con Remotion en el formato de cada red, con
+capas de texto encima si las querés. Todo corre en tu máquina, en una interfaz
+web local.
 
-| Track | Dónde | Qué es |
+```
+URL de YouTube (o un archivo tuyo)
+  → yt-dlp baja el video + el transcript
+  → Claude lee el transcript y propone los momentos   (o los marcás vos en la timeline)
+  → elegís qué cortar y en qué formato, viendo el recorte sobre la foto del tramo
+  → ffmpeg corta, pega los bordes al audio y normaliza a −14 LUFS
+  → Remotion renderiza en 9:16 / 1:1 / 16:9 / split, siguiendo al que habla
+  → Claude escribe los textos para TikTok, Instagram y YouTube Shorts
+  → CSV con todo
+```
+
+> Este repositorio tiene **dos proyectos** que comparten entorno pero no código:
+>
+> | | Dónde | Qué es |
+> |---|---|---|
+> | **Clip Studio** | raíz (`app.py`, `modules/`, `components/`, `remotion/`) | Lo que describe este README. |
+> | **Episodios** | [`episodios/`](episodios/) | Videos animados verticales sincronizados a una locución, uno por carpeta. Ver [`episodios/COMO-ENTREGAR.md`](episodios/COMO-ENTREGAR.md). |
+
+---
+
+## Requisitos
+
+| | Versión | Para qué |
 |---|---|---|
-| **1 · Cortes** | raíz del repo (`app.py`, `modules/`, `remotion/`) | Pipeline de clips: YouTube → Claude → ffmpeg → Remotion → captions. Todo lo que sigue de este README. |
-| **2 · Episodios** | [`episodios/`](episodios/) | Videos animados verticales sincronizados al VO, uno por carpeta. Ver [`episodios/COMO-ENTREGAR.md`](episodios/COMO-ENTREGAR.md). |
+| **Python** | 3.11 o superior | La app y el pipeline |
+| **Node.js + npm** | 18 o superior | Remotion (el render) |
+| **ffmpeg** | cualquiera reciente, en el `PATH` | Cortar, medir y normalizar audio |
+| **API key de Anthropic** | — | Elegir momentos y escribir los textos. **Opcional**: se puede usar Ollama local en su lugar. |
 
-`remotion/` es **solo** el render de clips del Track 1 (lo invoca
-`config.REMOTION_DIR`). Cada episodio del Track 2 tiene su propio
-proyecto Remotion adentro de su carpeta.
-
----
-
-# Track 1 · Fast Video Clipping
-
-Pipeline automatizado que descarga un video de YouTube, identifica los mejores momentos con Claude AI, corta los clips con ffmpeg, convierte a formato vertical 9:16 con Remotion y genera captions para TikTok, Instagram y YouTube Shorts — todo desde una interfaz web local.
-
----
-
-## Demo del flujo
-
-```
-URL de YouTube
-    → yt-dlp descarga el video + transcript VTT
-    → Claude analiza el transcript y elige los mejores momentos
-    → El usuario selecciona cuáles cortar y en qué formato (9:16, 1:1, 16:9 o split)
-    → ffmpeg corta los clips
-    → Remotion renderiza en el formato elegido (recorte al hablante / dos recortes apilados)
-    → Claude genera captions para cada plataforma
-    → Descarga CSV con todos los datos
-```
-
----
-
-## Requisitos del sistema
-
-### 1. Python 3.11+
-
-Descargá desde [python.org](https://www.python.org/downloads/).  
-Verificá con:
 ```bash
-python --version
-```
-
-### 2. Node.js 18+ y npm
-
-Necesario para Remotion (renderizado de video).  
-Descargá desde [nodejs.org](https://nodejs.org/).  
-Verificá con:
-```bash
-node --version
-npm --version
-```
-
-### 3. ffmpeg
-
-Necesario para cortar los clips del video fuente.
-
-**Windows** (recomendado via Chocolatey o Winget):
-```powershell
-# Con Chocolatey
-choco install ffmpeg
-
-# Con Winget
-winget install ffmpeg
-```
-
-**macOS:**
-```bash
-brew install ffmpeg
-```
-
-**Linux:**
-```bash
-sudo apt install ffmpeg
-```
-
-Verificá con:
-```bash
+python --version     # 3.11+
+node --version       # 18+
 ffmpeg -version
 ```
 
-### 4. Clave API de Anthropic (Claude)
+Instalar ffmpeg:
 
-Creá una cuenta en [console.anthropic.com](https://console.anthropic.com) y generá una API key.
+```bash
+winget install ffmpeg        # Windows
+brew install ffmpeg          # macOS
+sudo apt install ffmpeg      # Debian / Ubuntu
+```
+
+La API key se saca de [console.anthropic.com](https://console.anthropic.com).
 
 ---
 
 ## Instalación
 
-### 1. Clonar el repositorio
-
 ```bash
 git clone https://github.com/gerriarte/Video_clipping.git
 cd Video_clipping
-```
 
-### 2. Configurar la API key
-
-Copiá el archivo de ejemplo y completá tu clave:
-
-**Lo más simple: no hagas nada acá.** La primera vez que abrís la app te recibe
-una pantalla de configuración donde ponés los datos de tu canal y la API key. La
-key se guarda en `.env` (que ya está en `.gitignore`) y los datos del canal en
-`settings.json`. Después se cambia todo desde **⚙ Ajustes**, en la barra lateral.
-
-Si preferís dejarlo listo antes de abrirla:
-
-```bash
-# Linux / macOS
-cp .env.example .env
-
-# Windows (PowerShell)
-Copy-Item .env.example .env
-```
-
-Abrí `.env` y reemplazá el valor:
-```
-ANTHROPIC_API_KEY=sk-ant-api03-TU_CLAVE_AQUI
-```
-
-O seteá la variable de entorno directamente:
-```bash
-# Linux / macOS
-export ANTHROPIC_API_KEY=sk-ant-api03-TU_CLAVE_AQUI
-
-# Windows (PowerShell)
-$env:ANTHROPIC_API_KEY = "sk-ant-api03-TU_CLAVE_AQUI"
-```
-
-Sin key, la app abre igual: te lleva a la pantalla de configuración. También
-podés elegir **Ollama** ahí y trabajar sin ninguna key.
-
-### 3. Instalar dependencias Python
-
-```bash
-# Crear entorno virtual (recomendado)
 python -m venv .venv
-
-# Activar
-# Linux / macOS:
-source .venv/bin/activate
-# Windows (PowerShell):
-.venv\Scripts\Activate.ps1
-
-# Instalar paquetes
+# Windows:        .venv\Scripts\Activate.ps1
+# Linux / macOS:  source .venv/bin/activate
 pip install -r requirements.txt
+
+cd remotion && npm install && cd ..
 ```
 
-### 4. Instalar dependencias de Remotion
+`npm install` baja Chromium y las dependencias de Remotion: la primera vez son
+unos 300 MB.
 
-```bash
-cd remotion
-npm install
-cd ..
-```
-
-Este paso descarga Chromium y las dependencias de Remotion (~300 MB la primera vez).
+**No hace falta compilar el frontend.** Los componentes React de la interfaz
+(`components/zumo_ui/`, `components/clip_editor/`) se versionan ya compilados;
+Node solo es necesario para Remotion. Si vas a modificarlos, ver
+[Desarrollo](#desarrollo).
 
 ---
 
-## Uso
-
-### Iniciar la app
+## Arrancar
 
 ```bash
 streamlit run app.py
 ```
 
-Se abrirá automáticamente en `http://localhost:8501`.
+Se abre en `http://localhost:8501`. En Windows también está `iniciar.bat`.
 
-### Flujo paso a paso
+**La primera vez** te recibe la pantalla de configuración: los datos de tu canal
+y con qué modelo querés trabajar.
 
-**Sidebar — Configuración del canal**  
-Antes de empezar completá (o ajustá) los datos de tu canal: nombre, temática, hosts y tono. Esta info guía a Claude al seleccionar clips y escribir captions.
+- Los **datos del canal** (nombre, de qué trata, quiénes aparecen, tono) son lo
+  que recibe el modelo para elegir los clips y escribir los textos. Cuanto más
+  concretos, mejor salen. Se guardan en `settings.json`.
+- La **API key** se guarda en `.env`, que está en `.gitignore`. Nunca entra en
+  `settings.json` ni en el estado del pipeline, que son archivos que se copian y
+  se comparten sin pensarlo.
+- Si elegís **Ollama**, no hace falta ninguna key: corre en tu máquina, es
+  gratis y privado, y es más lento.
 
-**Paso 1 — Descargar video**  
-Pegá la URL de YouTube y hacé clic en "Descargar". El sistema descarga el video en la mejor calidad disponible y el transcript VTT (subtítulos automáticos de YouTube) que Claude usará para analizar el contenido.
+Se vuelve a esa pantalla desde **⚙ Ajustes**, en la barra lateral.
 
-> El video debe tener subtítulos automáticos habilitados en YouTube. Si no los tiene, la detección de momentos no funcionará con precisión de timestamps.
+Si preferís dejarlo configurado antes de abrirla, copiá `.env.example` a `.env`
+y completá `ANTHROPIC_API_KEY`.
 
-**Paso 2 — Analizar con Claude**  
-Elegí cuántos clips querés (1–30) y el rango de duración (10–180 segundos). Claude lee el transcript completo del video, distribuye los clips a lo largo de todo el contenido y genera títulos precisos.
+---
 
-**Paso 3 — Seleccionar y cortar**  
-Revisá la tabla de clips identificados. Podés:
-- Marcar/desmarcar cuáles cortar
-- Editar el título y los tiempos de inicio/fin
-- Elegir el formato por clip:
-  - **9:16 vertical** — recorte vertical a pantalla completa, centrado en quien habla
-  - **9:16 completo** — el 16:9 entero centrado sobre **negro** (barras arriba y abajo): lienzo vertical sin perder nada de la imagen, para pantallas compartidas, gráficos o planos abiertos
-  - **1:1 cuadrado** — recorte cuadrado centrado en el hablante
-  - **16:9 horizontal** — plano completo original
-  - **9:16 dividido (split)** — dos recortes del mismo video apilados (un host arriba, otro abajo)
-- Seleccionar el tipo de contenido
+## Cómo se usa
 
-**Ver el video antes de elegir formato** — el panel "👁 Ver el video y elegir formato"
-muestra, para cada tramo, tres fotos representativas y un reproductor del tramo, sin
-necesidad de cortarlo primero.
+### 1 · Fuente
 
-Además analiza la toma: muestrea el tramo cada ~3 s (≈24 muestras) y mide **cuánto
-tiempo** hay dos personas en cuadro. Con eso marca con ⭐ el formato sugerido y
-muestra la evidencia:
+Pegás una URL de YouTube, o elegís un archivo local de una lista: la app muestra
+lo que hay en tu carpeta de material (configurable en Ajustes; por defecto
+`downloads/`) con nombre, carpeta y peso. No es un formulario de subida a
+propósito — el archivo ya está en tu disco.
 
-- `👥 2 personas en el 88% del clip (24 muestras)` → sugiere **split**
-- `👤 1 persona en el 92% del clip` → sugiere **9:16**
-- `🖥 casi sin caras` → sugiere **9:16 completo** (vertical, pero sin recortar)
-- `🔀 cambia de plano — 2 personas en el 38% del clip` → la toma alterna; ningún
-  formato único queda bien en todo el clip, conviene mirarlo
+Si el video no trae subtítulos, o los que trae cubren menos de la mitad,
+transcribe con Whisper local (`faster-whisper`).
 
-Podés aplicar todas las sugerencias de una, o elegir el formato clip por clip ahí
-mismo (la tabla se actualiza sola).
+### 2 · Clips
 
-**🔀 Seguir la toma** (checkbox por clip) — para los clips que alternan planos: el
-recorte cambia *dentro* del clip, split mientras están los dos en cuadro y recorte
-cerrado al hablante cuando la cámara va a uno solo. Las dimensiones del archivo no
-cambian nunca (un mp4 no puede cambiar de aspecto a mitad de camino); lo que cambia
-es cómo se recorta el mismo lienzo. Si el clip no cambia de plano, el render usa un
-layout fijo y este ajuste no hace nada.
+Claude lee el transcript completo y propone momentos repartidos a lo largo del
+video. Elegís cuántos (1–30) y el rango de duración.
 
-> El conteo se hace con Haar (frontal + perfil), que también detecta como caras los
-> dibujos y peluches del set. Por eso las etiquetas dicen "2+ personas" y nunca un
-> número exacto: para elegir formato alcanza con saber si hay una o más de una.
+**No depende de Claude:** con **✂ Timeline** se abre un editor visual —forma de
+onda, transcript clicable, regiones arrastrables— donde marcás los cortes a
+mano. Atajos: espacio reproduce, `I` y `O` marcan entrada y salida.
 
-**Cómo se corta** — dos opciones antes de darle a cortar:
-- **🎧 Ajustar los bordes al audio** (activado por defecto) — los tiempos del
-  transcript traen 1–2 s de error; esto pega el inicio y el fin a la pausa real más
-  cercana (hasta 1,5 s) para que el clip no arranque ni termine con media palabra.
-- **✂️ Sacar silencios internos (jump cuts)** — elimina las pausas de más de 0,7 s
-  dentro del clip y pega los trozos con un fundido corto. Acelera el ritmo; en
-  charlas pausadas puede sonar brusco.
+### 3 · Corte
 
-El audio siempre se normaliza a **-14 LUFS**, que es el nivel que usan TikTok,
+Una grilla con una tarjeta por clip. En cada una:
+
+- La **foto del tramo**, y **dibujado encima, el recorte que hace el formato**.
+  Lo que queda afuera se apaga. Es la diferencia entre elegir mirando un nombre
+  y elegir mirando lo que va a pasar.
+- **La evidencia del análisis de la toma**: el tramo se muestrea cada ~3 s y se
+  mide *cuánto tiempo* hay una o dos personas en cuadro — `1 persona el 92% del
+  clip`, `2 personas en el 88%`, `cambia de plano`. El formato sugerido lleva ★,
+  y se pueden aplicar todas de una.
+- Título editable, timecodes, tipo, y los cinco formatos:
+
+| Formato | Qué hace |
+|---|---|
+| **9:16** | Recorte vertical a pantalla completa, centrado en quien habla |
+| **9:16 completo** | El 16:9 entero sobre negro, con barras: lienzo vertical sin perder nada |
+| **1:1** | Recorte cuadrado centrado en el hablante |
+| **16:9** | El plano original completo |
+| **split** | Dos recortes apilados: un host arriba, otro abajo |
+
+- **Sigue al hablante** — el recorte se desplaza para acompañar a quien habla.
+- **Sigue la toma** — para los clips que alternan planos: el recorte cambia
+  *dentro* del clip (split cuando están los dos, cerrado cuando la cámara va a
+  uno). Las dimensiones nunca cambian: un mp4 no puede cambiar de aspecto a
+  mitad de camino, lo que cambia es cómo se recorta el mismo lienzo.
+
+Antes de cortar, dos decisiones sobre el audio:
+
+- **Ajustar los bordes al audio** (por defecto sí) — los tiempos del transcript
+  traen 1–2 s de error; esto pega el inicio y el fin a la pausa real más cercana
+  para que el clip no arranque con media palabra.
+- **Sacar silencios internos (jump cuts)** — elimina las pausas de más de 0,7 s
+  y pega los trozos. Acelera el ritmo; en charlas pausadas puede sonar brusco.
+
+El audio siempre se normaliza a **−14 LUFS**, que es el nivel de TikTok,
 Instagram y Shorts.
 
-> El encuadre (a quién recorta cada formato) se decide automáticamente con detección
-> de caras. Todos los formatos se renderizan con Remotion. Los subtítulos ya no se
-> queman en el video: se agregan desde las apps de redes.
+### 4 · Render
 
-Hacé clic en "Cortar clips con ffmpeg" para generar los archivos.
+La misma grilla, ahora con los clips ya cortados. Tocás una tarjeta y abajo
+aparecen sus ajustes.
 
-**Paso 4 — Preview y captions**  
-Previsualizá cada clip y hacé clic en "Generar captions con Claude". Si hay clips en 9:16, Remotion los renderiza primero. Luego Claude genera captions optimizados para TikTok, Instagram y YouTube Shorts. Podés copiarlos directamente desde la interfaz.
+**Encuadre** — a quién recorta, y en split quién va arriba. Se previsualiza en
+tres momentos del clip (arranque, medio, final), así ves si la persona se corre
+antes de pagar un render entero.
 
-**🎯 Ajustar formato y encuadre** — se trabaja **un clip por vez** (lo elegís en el
-desplegable). Ahí podés:
+**Capas** — texto encima del video. No alargan el clip ni obligan a volver a
+cortar:
 
-- **Cambiar el formato** aunque el clip ya esté cortado. El corte es el mismo para
-  los cuatro formatos: el formato solo afecta al render, así que corregir una
-  elección mala no obliga a volver a cortar. En el Paso 5, además, el cambio de
-  formato está junto a "🔄 Re-renderizar este clip".
-- **Elegir el encuadre a mano** (a quién recorta, y en split quién va arriba). El
-  recorte se previsualiza en **tres momentos** del clip (arranque / medio / final),
-  así ves si la persona se corre y el encuadre la pierde antes de pagar un render
-  entero. Con "🔍 Ver el preview grande" mirás uno solo a todo el ancho.
+| Capa | Qué es |
+|---|---|
+| **Gancho** | Una frase grande al arranque (usa el título del clip si no escribís otra). Entra de golpe, subiendo, o escribiéndose sola. |
+| **Placa de nombre** | Nombre y rol de quien habla, tomados de los hosts que cargaste en Ajustes. |
+| **Apertura / Cierre** | Un título sobre los primeros o los últimos segundos. No tapan el video: lo oscurecen lo que le digas. |
 
-> Los clips se renderizan de a 2 en paralelo. Se ajusta con la variable de entorno
-> `RENDER_CONCURRENCY` — bajala a 1 si la máquina se queda sin memoria (cada render
-> levanta su propio Chromium), subila si te sobra.
+**Ver cómo queda** renderiza un frame real con las capas puestas — la misma
+composición que el render final. Si después cambiás algo, el preview queda
+marcado como viejo en vez de mentir.
 
-**Descarga CSV**  
-Al finalizar podés descargar un CSV con todos los clips, tiempos, paths de archivo y captions para cada plataforma.
+Las capas respetan las zonas que tapan las apps: se reserva el 18% de abajo y el
+10% de arriba, donde TikTok, Reels y Shorts dibujan su propia interfaz.
 
----
+Desde acá también se pueden **buscar más clips** en las zonas del video que
+todavía no se usaron.
 
-## Estructura del proyecto
+### 5 · Publicar
 
-```
-Video_clipping/
-├── app.py                  # Interfaz Streamlit (UI principal)
-├── config.py               # Configuración: rutas, modelo, parámetros de clip
-├── requirements.txt        # Dependencias Python
-├── .env.example            # Plantilla para la API key
-│
-├── modules/
-│   ├── downloader.py       # Descarga video y VTT con yt-dlp
-│   ├── analyzer.py         # Parsea VTT y llama a Claude para identificar clips
-│   ├── clipper.py          # Corta clips con ffmpeg
-│   ├── renderer.py         # Renderiza en 9:16 con Remotion
-│   └── caption_gen.py      # Genera captions con Claude
-│
-└── remotion/               # Proyecto Remotion (TypeScript/React)
-    ├── src/
-    │   ├── index.ts        # Entry point
-    │   ├── Root.tsx        # Registro de composiciones
-    │   └── ClipComposition.tsx  # Componente: fondo borroso + letterbox 9:16
-    ├── package.json
-    └── tsconfig.json
-```
+Lista de clips a la izquierda, el clip abierto a la derecha: el video
+renderizado, su formato, y los textos para TikTok, Instagram y YouTube Shorts,
+editables y con botón de copiar. Los cambios se guardan.
 
-### Carpetas generadas en runtime (en .gitignore)
-
-```
-downloads/    # Videos descargados de YouTube
-clips/        # Clips cortados por ffmpeg
-output/       # Clips renderizados en 9:16 por Remotion
-```
+Al final, **⬇️ Descargar CSV** con todos los clips: tiempos, duración real,
+rutas de archivo y los tres textos.
 
 ---
 
-## Configuración avanzada (`config.py`)
+## Qué hay en el repositorio
 
-| Variable | Default | Descripción |
+```
+app.py                     La interfaz (Streamlit)
+config.py                  Rutas, modelo, formatos, parámetros de corte
+pipeline.py                El mismo flujo por línea de comandos
+
+modules/
+  downloader.py            yt-dlp: video + transcript
+  transcriber.py           Whisper local, cuando no hay subtítulos
+  analyzer.py              Parseo del VTT y elección de momentos
+  llm.py                   Anthropic u Ollama, detrás de una sola interfaz
+  clipper.py               Corte con ffmpeg, bordes al audio, jump cuts
+  audio_edit.py            Detección de silencios y normalización
+  segment_preview.py       Análisis de la toma (cuántas personas, cuánto tiempo)
+  layout_detector.py       Detección de caras para decidir el encuadre
+  framing.py               Geometría del recorte
+  renderer.py              Llama a Remotion; render en paralelo
+  finish.py                Arte final del video (colorimetría, terminación)
+  overlays.py              El modelo de las capas
+  ui_state.py              Traducción entre los clips y las pantallas
+  library.py               Qué material hay para trabajar
+  settings.py              Configuración del usuario y manejo del .env
+  imaging.py               Lectura de imágenes (ver la nota sobre acentos)
+  media_server.py          Servidor HTTP local con Range, para el navegador
+  peaks.py, proxy.py       Forma de onda y proxy 480p del editor
+
+components/
+  zumo_ui/                 Las pantallas en React (galería y publicación)
+  clip_editor/             El editor de timeline (wavesurfer.js)
+
+remotion/                  El proyecto Remotion del render de clips
+  src/ClipComposition.tsx  Recortes: fill / fit / letterbox / split
+  src/overlays/            Gancho, placa de nombre, apertura y cierre
+
+tests/                     186 tests (pytest)
+docs/ROADMAP.md            Historia de decisiones y cómo se llegó acá
+docs/DEPLOYMENT.md         Notas de despliegue
+```
+
+Carpetas y archivos que se crean solos y no se versionan: `downloads/`,
+`clips/`, `output/`, `.pipeline_state.json`, `.env`, `settings.json`.
+
+---
+
+## Configuración
+
+Todo esto sale de variables de entorno o del `.env`. Los valores por defecto
+están en `config.py`.
+
+| Variable | Default | Qué hace |
 |---|---|---|
-| `CLAUDE_MODEL` | `claude-sonnet-4-6` | Modelo de Claude a usar |
-| `TARGET_CLIPS` | `10` | Cantidad de clips por defecto |
-| `MIN_CLIP_SECONDS` | `15` | Duración mínima de clip |
-| `MAX_CLIP_SECONDS` | `60` | Duración máxima de clip |
-| `OUTPUT_WIDTH` | `1080` | Ancho del video 9:16 |
-| `OUTPUT_HEIGHT` | `1920` | Alto del video 9:16 |
-| `OUTPUT_FPS` | `30` | FPS del video de salida |
+| `ANTHROPIC_API_KEY` | — | Requerida si el proveedor es `anthropic` |
+| `LLM_PROVIDER` | `anthropic` | `anthropic` u `ollama` |
+| `CLAUDE_MODEL` | `claude-sonnet-4-6` | Modelo de Claude |
+| `OLLAMA_HOST` | `http://localhost:11434` | Servidor Ollama |
+| `OLLAMA_MODEL` | `qwen2.5:14b` | Modelo local |
+| `RENDER_CONCURRENCY` | 2 (1 con menos de 8 núcleos) | Clips que se renderizan a la vez. Cada uno levanta su Chromium: bajala si te quedás sin memoria. |
+| `SPEAKER_FOLLOW_DEFAULT` | `1` | Si el recorte sigue al hablante por defecto |
+| `ZUMO_MATERIAL_DIR` | `downloads/` | Dónde busca los videos locales |
+| `ZUMO_STATE_FILE` | `.pipeline_state.json` | Útil para levantar una instancia de prueba sin pisar la que estás usando |
+
+Parámetros que se editan en `config.py`: `TARGET_CLIPS` (10),
+`MIN_CLIP_SECONDS` (15), `MAX_CLIP_SECONDS` (60), `FORMAT_PRESETS` (las
+dimensiones de cada formato) y `MAX_OUTPUT_FPS` (60).
 
 ---
 
-## Troubleshooting
+## Desarrollo
 
-**"Falta la API key de Anthropic"**  
-Ponela en **⚙ Ajustes** dentro de la app, o verificá que `.env` existe en la raíz
-del proyecto y contiene `ANTHROPIC_API_KEY`. Los scripts de línea de comandos
-(`pipeline.py`) no tienen esa pantalla y fallan al arrancar si falta.
+```bash
+pytest -q                        # los 186 tests
+cd remotion && npx tsc --noEmit  # typecheck del render
+```
 
-**Remotion falla con `[WinError 2]`**  
-En Windows, `npx` no es un ejecutable directo. El proyecto ya lo maneja usando `npx.cmd` automáticamente, pero asegurate de tener Node.js instalado y en el PATH.
+Para tocar las pantallas React:
 
-**Chromium no puede cargar el video**  
-El servidor HTTP interno corre en el puerto `19876`. Si ese puerto está ocupado, puede haber un error. Reiniciá la app para que se libere.
+```bash
+cd components/zumo_ui/frontend
+npm install
+npm run dev                      # servidor de Vite en :5174
+# y poner _RELEASE = False en components/zumo_ui/__init__.py
+npm run build                    # el build se commitea
+```
 
-**El transcript VTT está vacío**  
-El video de YouTube debe tener subtítulos automáticos habilitados. Videos muy recientes o con subtítulos solo manuales no funcionan. Probá con otro video.
+Para previsualizar en Remotion Studio (`cd remotion && npx remotion studio`)
+dejá cualquier clip en `remotion/public/preview.mp4` — está gitignorado. Sin él
+la composición abre en negro con una duración de muestra.
 
-**ffmpeg no encontrado**  
-Asegurate de que ffmpeg esté en el PATH del sistema. Ejecutá `ffmpeg -version` en la terminal para verificar.
-
----
-
-## Roadmap y despliegue
-
-- **[docs/ROADMAP.md](docs/ROADMAP.md)** — plan de evolución: formato manual por
-  clip (16:9, 1:1, split), calidad visual, y el editor visual de timeline
-  (Claude-opcional). Incluye el registro de decisiones.
-- **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** — preparación para despliegue rápido
-  desde GitHub (Docker en VM, variables de entorno, build del componente custom).
+**Una trampa que ya costó cara:** las rutas de este proyecto salen del título
+del video, o sea que casi siempre tienen acentos. `cv2.imread` en Windows no
+abre esas rutas y devuelve `None` sin avisar. Usá `modules.imaging.imread`.
 
 ---
 
-## Tecnologías
+## Dependencias y licencias
 
-- [Streamlit](https://streamlit.io) — UI web local
-- [Claude (Anthropic)](https://www.anthropic.com) — Análisis de contenido y generación de captions
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp) — Descarga de video y transcript
-- [ffmpeg](https://ffmpeg.org) — Corte de video
-- [Remotion](https://www.remotion.dev) — Renderizado de video en React/TypeScript
+### Python
+
+| Paquete | Licencia |
+|---|---|
+| [anthropic](https://github.com/anthropics/anthropic-sdk-python) | MIT |
+| [streamlit](https://streamlit.io) | Apache-2.0 |
+| [yt-dlp](https://github.com/yt-dlp/yt-dlp) | Unlicense |
+| [curl_cffi](https://github.com/lexiforest/curl_cffi) | MIT |
+| [requests](https://requests.readthedocs.io) | Apache-2.0 |
+| [pandas](https://pandas.pydata.org) | BSD-3-Clause |
+| [faster-whisper](https://github.com/SYSTRAN/faster-whisper) | MIT |
+| [opencv-python](https://github.com/opencv/opencv-python) | Apache-2.0 |
+| [mediapipe](https://github.com/google-ai-edge/mediapipe) | Apache-2.0 |
+| [numpy](https://numpy.org) | BSD-3-Clause |
+
+### JavaScript
+
+| Paquete | Licencia |
+|---|---|
+| [remotion](https://www.remotion.dev) y los `@remotion/*` del core | **Licencia propia — ver abajo** |
+| `@remotion/layout-utils`, `@remotion/media-utils`, `@remotion/zod-types` | MIT |
+| [react](https://react.dev) / react-dom | MIT |
+| [vite](https://vite.dev) | MIT |
+| [typescript](https://www.typescriptlang.org) | Apache-2.0 |
+| [zod](https://zod.dev) | MIT |
+| [wavesurfer.js](https://wavesurfer.xyz) | BSD-3-Clause |
+| [streamlit-component-lib](https://github.com/streamlit/streamlit) | Apache-2.0 |
+
+### Herramientas externas
+
+| | Licencia |
+|---|---|
+| [ffmpeg](https://ffmpeg.org) | LGPL-2.1+ o GPL-2+ **según cómo esté compilado el binario que tengas instalado**. No se distribuye con este proyecto. |
+| Chromium | BSD-3-Clause (lo baja Remotion) |
+
+### ⚠️ Remotion no es MIT
+
+Remotion tiene una **licencia de dos niveles**. Según sus términos, podés usarlo
+gratis si sos:
+
+- una persona,
+- una organización con fines de lucro de **hasta 3 empleados**,
+- una organización sin fines de lucro,
+- o estás evaluando si te sirve.
+
+Por encima de eso hace falta una **licencia de empresa paga**. Los términos
+completos están en [remotion.dev/license](https://www.remotion.dev/docs/license)
+y en `remotion/node_modules/remotion/LICENSE.md`.
+
+Si tu organización supera ese umbral, esto te aplica: el render de clips no
+funciona sin Remotion.
+
+### Sobre el material que procesás
+
+Los videos que produce esta herramienta salen de **material tuyo**. Descargar
+videos de YouTube que no te pertenecen puede violar sus términos de servicio y
+los derechos de quien los hizo. Tener los derechos sobre lo que se procesa es
+responsabilidad de quien usa la herramienta.
+
+Los textos los genera un modelo de Anthropic; se aplican sus
+[términos de uso](https://www.anthropic.com/legal/consumer-terms).
+
+---
+
+## Licencia de este proyecto
+
+**Todavía no tiene una.** Sin un archivo `LICENSE`, y aunque el repositorio sea
+público, por defecto se reservan todos los derechos: nadie más puede usarlo,
+copiarlo ni modificarlo legalmente.
+
+Si querés que otros lo usen hay que elegir una y agregar el archivo. MIT y
+Apache-2.0 son las opciones habituales para algo así; Apache-2.0 además incluye
+una cláusula de patentes. Una aclaración que importa: **una licencia permisiva
+sobre este código no cambia la de Remotion** — quien lo use va a seguir
+necesitando la licencia de empresa si supera el umbral.
+
+---
+
+## Si algo falla
+
+**"Falta la API key de Anthropic"**
+Ponela en **⚙ Ajustes** dentro de la app, o en `.env`. Los scripts de línea de
+comandos (`pipeline.py`) no tienen esa pantalla y fallan al arrancar si falta.
+
+**yt-dlp devuelve 403 al bajar el video**
+YouTube rota el cifrado de sus URLs y una versión vieja de yt-dlp deja de
+firmarlas: `pip install -U yt-dlp`. Si el video baja pero dura 60 segundos no es
+yt-dlp, es la IP, que está limitada — probá desde otra red o usá un archivo
+local.
+
+**Remotion falla con `[WinError 2]`**
+En Windows `npx` no es un ejecutable directo. El proyecto ya usa `npx.cmd`;
+verificá que Node esté instalado y en el `PATH`.
+
+**El transcript viene vacío o muy corto**
+El video no tiene subtítulos automáticos. La app lo detecta y ofrece transcribir
+con Whisper local; la primera vez se baja el modelo.
+
+**Se queda sin memoria al renderizar**
+Cada render levanta su propio Chromium. Bajá `RENDER_CONCURRENCY` a 1.
+
+**Remotion Studio se queda en "Running calculateMetadata()…"**
+Falta `remotion/public/preview.mp4`. Poné cualquier clip ahí.
+
+---
+
+## Más
+
+- **[docs/ROADMAP.md](docs/ROADMAP.md)** — cómo se llegó a cada decisión, qué se
+  probó y no funcionó, y las mediciones detrás de cada cambio.
+- **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** — notas de despliegue.

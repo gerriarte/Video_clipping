@@ -1,4 +1,4 @@
-# Despliegue — Fast Video Clipping
+# Despliegue — Clip Studio
 
 Guía para preparar un **despliegue rápido desde GitHub**. La app es pesada
 (ffmpeg + Node/Remotion + Chromium headless + MediaPipe + Whisper), así que la

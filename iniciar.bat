@@ -1,10 +1,10 @@
 @echo off
-title Fast Video Clipping
-cd /d "D:\ABRA\Zumo\Ediciones"
+title Clip Studio
+cd /d "%~dp0"
 
 echo.
 echo  =========================================
-echo    Fast Video Clipping - Iniciando...
+echo    Clip Studio - Iniciando...
 echo  =========================================
 echo.
 echo  Abriendo en http://localhost:8501
