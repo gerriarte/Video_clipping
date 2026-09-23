@@ -397,7 +397,7 @@ da más material para elegir en el editor. Cambio chico, encaja en el Track 2.
 
 ---
 
-## Track 4 — La UI en React, pantalla por pantalla   ✅ FASES 1 a 4 (2026-09-23)
+## Track 4 — La UI en React, pantalla por pantalla   ✅ FASES 1 a 5 (2026-09-23)
 
 > Decisión: la UI se mueve a React **por pantalla**, empezando por la que más
 > dolía. El componente se escribe contra una interfaz de props/callbacks y toda
@@ -611,6 +611,74 @@ variables), que `save_settings` rechace secretos, y que la máscara no filtre.
 adentro. El Reset se fue a la barra lateral, que ahora dice el canal y el modelo
 en vez de los cuatro campos de configuración que ocupaban 245 px para siempre.
 
+### Fase 5 — Se va Postiz, entra el material, y el bug de la tilde   ✅ (2026-09-23)
+
+**Postiz, afuera.** La integración no funciona por el lado de Postiz, así que se
+saca entera: `modules/postiz.py`, `schedule_postiz.py`, el Paso 6 de la app, las
+variables de `config.py` y del `.env.example`, y la sección de `DEPLOYMENT.md`.
+La salida del pipeline es el CSV, que de paso ahora reporta la duración **real**
+del archivo (con jump cuts no es `end - start`).
+
+`POSTIZ_API_KEY` sigue en la lista negra de `settings.py` a propósito: la
+integración se fue, pero el `.env` de quien venía usando esto la tiene igual, y
+esa lista existe para que una key no termine en un archivo que se comparte.
+
+**El material se elige, no se escribe.** "Archivo local" era un campo de texto
+donde había que tipear `C:\Videos\mi_video.mp4`. Ahora lista lo que hay en una
+carpeta configurable (`modules/library.py`), con nombre, carpeta de origen y
+peso, del más nuevo al más viejo, y deja "Otra ruta…" para el resto. No es un
+`file_uploader` a propósito: el archivo está en el disco de la misma máquina que
+corre la app, así que subirlo por HTTP sería mandar varios GB para dejarlos
+donde ya estaban.
+
+Dos cosas que el listado no hace, y son el punto:
+- **No ofrece los `proxy480`.** Son las copias de 480p que genera la app para
+  editar. Elegir una significaría cortar y renderizar el episodio entero desde
+  una copia degradada sin que nada lo avise.
+- **No trata una carpeta vacía como "la raíz".** `Path("")` es `Path(".")`: sin
+  ese corte, dejar el campo vacío en Ajustes listaría los renders de `output/`
+  como si fueran material de origen. Lo encontró el test, no la vista.
+
+---
+
+### El bug de la tilde
+
+Venía arrastrándose que el análisis de la toma decía **"sin caras el 100% del
+clip"** en todos los tramos, con las caras a la vista en la miniatura de al lado.
+Estaba anotado como un problema del detector contra el fondo verde del set. No
+era el detector.
+
+`cv2.imread` en Windows abre el archivo con la *code page* ANSI del sistema, no
+con UTF-8. Con una `ó` en la ruta no encuentra nada y devuelve `None`: sin
+excepción, sin aviso. Y el `video_id` de esta app sale del título del episodio,
+así que `clips/_previews/Automatización_con_IA…/f_001.jpg` era ilegible y
+`detect_faces` devolvía `[]` para todos los frames.
+
+Medido sobre los 735 frames cacheados del episodio de prueba:
+
+| | Antes | Después |
+|---|---|---|
+| Frames con al menos una cara | **0 (0%)** | **710 (96%)** |
+| Frames con dos o más | 0 (0%) | 52 (7%) |
+
+Y eso cambia lo que la app recomienda: los 15 clips sugerían `9:16-full`
+(lienzo vertical con barras, sin recortar nada), que es lo que sugiere cuando no
+ve caras. Ahora sugieren `9:16` con el recorte **puesto sobre la persona**, que
+es lo que se ve en la galería: el marco dejó de estar centrado por defecto.
+
+El arreglo es `modules/imaging.py`: leer los bytes desde Python (que sí entiende
+la ruta) y dejar que OpenCV decodifique el buffer. Reemplaza a `cv2.imread` en
+los cuatro lugares donde estaba (`segment_preview`, `layout_detector`,
+`renderer`, `app`).
+
+**No alcanzaba con arreglar la lectura:** los `faces.json` guardados tenían los
+ceros adentro y se habrían seguido usando para siempre. El caché ahora lleva
+versión (`FACES_CACHE_VERSION`), y el formato viejo — una lista pelada, sin
+versión — se descarta por definición.
+
+**Para acordarse:** cualquier ruta de esta app puede tener acentos, porque sale
+del título de un episodio en español. Nada que toque archivos puede asumir ASCII.
+
 ### La estructura del frontend
 
 Un solo proyecto de frontend y un solo build; `screen` elige la pantalla.
@@ -637,13 +705,9 @@ cosas sin pelearse con nada.
 
 ### Lo que queda para las fases siguientes
 
-- **La entrada de un archivo local** sigue escribiéndose a mano: falta poder
-  arrastrarlo o elegirlo de `episodios/*/_entrada/`.
-- **El Paso 6 (Postiz)** es el único que quedó con la forma vieja.
-- **El detector de caras no ve este set.** En el episodio de prueba los 30 tramos
-  dan "sin caras el 100%" y la sugerencia sale `9:16-full` para todos, con caras
-  clarísimas en las fotos. Es el Haar de `segment_preview` contra el fondo verde
-  y el mural, no la galería.
+- **Los dibujos del mural y los peluches siguen contando como caras** en algunos
+  frames (por eso las etiquetas dicen "2+ personas" y nunca un número exacto).
+  Ahora que la detección funciona de verdad, vale medir cuánto ruido mete.
 - **El detector de caras no ve este set.** En el episodio de prueba, los 15
   tramos dan "sin caras el 100%" y la sugerencia sale `9:16-full` para todos,
   aunque las fotos tienen caras claras. Es el Haar de `segment_preview` contra
@@ -667,3 +731,5 @@ cosas sin pelearse con nada.
 | 2026-09-23 | Un solo proyecto de frontend y un solo build para todas las pantallas; `screen` elige cuál montar. Un proyecto npm por componente no funciona (resolución de módulos), y varias entradas HTML tampoco (rutas de assets). |
 | 2026-09-23 | La traducción clips ↔ pantallas sale de `app.py` a `modules/ui_state.py` con tests: es donde un bug hace perder ediciones sin avisar. |
 | 2026-09-23 | La API key se pone desde la app y va al `.env`, nunca a `settings.json` ni al estado. `config.py` deja de reventar al importar: sin key la app abre y te lleva a configurarla. |
+| 2026-09-23 | Se saca la integración con Postiz: no funciona del lado de Postiz. La salida del pipeline es el CSV. |
+| 2026-09-23 | `cv2.imread` no lee rutas con acentos en Windows: se prohíbe en el proyecto, va `modules.imaging.imread`. Cualquier ruta de esta app puede tener una tilde, porque sale del título del episodio. |

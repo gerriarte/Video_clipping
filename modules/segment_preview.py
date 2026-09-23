@@ -22,6 +22,7 @@ import math
 import shutil
 import subprocess
 from pathlib import Path
+from modules.imaging import imread
 
 from modules.layout_detector import _cluster_by_x
 
@@ -172,7 +173,7 @@ def detect_faces(frame_path) -> list:
     except ImportError:
         return []
 
-    img = cv2.imread(str(frame_path))
+    img = imread(str(frame_path))
     if img is None:
         return []
     h, w = img.shape[:2]
@@ -241,6 +242,43 @@ def _nearest(x: float, centers: list) -> int:
 # ──────────────────────────────────────────────────────────────────────────────
 # Cómo es la toma a lo largo del clip
 # ──────────────────────────────────────────────────────────────────────────────
+
+# Versión del caché de caras en disco. Subirla invalida lo guardado.
+#   1 → sin marca de versión. Además, en Windows `cv2.imread` no abría las rutas
+#       con acentos, así que TODO episodio con una tilde en el título quedó
+#       cacheado con cero caras. Esos archivos hay que descartarlos, no leerlos.
+#   2 → escrito con `modules.imaging.imread`.
+FACES_CACHE_VERSION = 2
+
+
+def _load_faces_cache(cache_file, n_frames: int):
+    """Las caras guardadas, o None si no sirven (versión vieja, largo distinto)."""
+    if cache_file is None or not cache_file.exists():
+        return None
+    try:
+        data = json.loads(cache_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    # El formato viejo era una lista pelada: se descarta por no tener versión.
+    if not isinstance(data, dict) or data.get("v", 1) < FACES_CACHE_VERSION:
+        return None
+    caras = data.get("faces")
+    if not isinstance(caras, list) or len(caras) != n_frames:
+        return None
+    return caras
+
+
+def _save_faces_cache(cache_file, faces_per_frame: list) -> None:
+    if cache_file is None:
+        return
+    try:
+        cache_file.write_text(
+            json.dumps({"v": FACES_CACHE_VERSION, "faces": faces_per_frame}),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
 
 def summarize_shots(frames_faces: list, times: list | None = None) -> dict:
     """
@@ -353,21 +391,10 @@ def analyze_segment(
     # Detectar caras cuesta ~1 s por tramo: se cachea junto a los frames para que
     # abrir el panel en una sesión nueva sea instantáneo.
     cache_file = (frames[0].parent / "faces.json") if frames else None
-    faces_per_frame = None
-    if cache_file is not None and cache_file.exists():
-        try:
-            cached = json.loads(cache_file.read_text(encoding="utf-8"))
-            if len(cached) == len(frames):
-                faces_per_frame = cached
-        except Exception:
-            faces_per_frame = None
+    faces_per_frame = _load_faces_cache(cache_file, len(frames))
     if faces_per_frame is None:
         faces_per_frame = [detect_faces(f) for f in frames]
-        if cache_file is not None:
-            try:
-                cache_file.write_text(json.dumps(faces_per_frame), encoding="utf-8")
-            except OSError:
-                pass
+        _save_faces_cache(cache_file, faces_per_frame)
 
     summary = summarize_shots(faces_per_frame, times)
 

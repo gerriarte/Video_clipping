@@ -20,9 +20,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SETTINGS_FILE = Path(os.environ.get("ZUMO_SETTINGS_FILE", BASE_DIR / "settings.json"))
 ENV_FILE = Path(os.environ.get("ZUMO_ENV_FILE", BASE_DIR / ".env"))
 
-# Claves que vive cada una en su lugar. Si algo de esto aparece en el dict de
-# settings, `save_settings` lo rechaza: es la red que evita que una key termine
-# en un archivo que se comparte.
+# Si algo de esto aparece en el dict de settings, `save_settings` lo rechaza: es
+# la red que evita que una key termine en un archivo que se comparte. POSTIZ_API_KEY
+# sigue en la lista aunque la integración se haya sacado, porque el .env de quien
+# venga usando esto desde antes la tiene igual.
 SECRET_KEYS = ("ANTHROPIC_API_KEY", "POSTIZ_API_KEY")
 
 DEFAULTS = {
@@ -30,6 +31,9 @@ DEFAULTS = {
     "channel_desc": "",
     "channel_hosts": "",
     "channel_tone": "",
+    # Vacío = la carpeta de descargas del proyecto (config.MATERIAL_DIR, que es
+    # absoluta). Una ruta relativa acá dependería de desde dónde se lanzó la app.
+    "material_dir": "",
     "llm_provider": "anthropic",
     "claude_model": "claude-sonnet-4-6",
     "ollama_model": "qwen2.5:14b",
@@ -77,9 +81,8 @@ def env_upsert(key: str, value: str, path: Path | None = None) -> None:
     Escribe `key=value` en el .env sin tocar el resto.
 
     Reescribir el archivo entero sería más simple y perdería los comentarios y
-    las otras claves (POSTIZ_API_KEY, por ejemplo) — o peor, las dejaría
-    escritas de otra forma. Acá se reemplaza la línea si existe y se agrega al
-    final si no.
+    las otras claves que haya — o peor, las dejaría escritas de otra forma. Acá
+    se reemplaza la línea si existe y se agrega al final si no.
     """
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
         raise ValueError(f"Nombre de variable inválido: {key!r}")

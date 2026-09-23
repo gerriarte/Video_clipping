@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from modules.imaging import imread
 
 import config
 from modules.finish import finish
@@ -234,7 +235,7 @@ def _source_aspect(frame_path) -> float:
     """Aspecto (ancho/alto) de la fuente, leído de una muestra del análisis."""
     try:
         import cv2
-        img = cv2.imread(str(frame_path))
+        img = imread(str(frame_path))
         if img is not None:
             h, w = img.shape[:2]
             if h:

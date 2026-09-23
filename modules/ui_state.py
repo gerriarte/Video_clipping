@@ -218,8 +218,8 @@ def apply_publish(patch: list, clips: list) -> bool:
     Vuelca el formato y los textos editados sobre los clips.
 
     Hasta la versión con `text_area` esto no existía: los captions se dibujaban
-    y no se leían nunca, así que editarlos no hacía nada y el CSV y Postiz
-    seguían usando el texto original de Claude.
+    y no se leían nunca, así que editarlos no hacía nada y el CSV salía con el
+    texto original de Claude.
     """
     changed = False
     for row in patch or []:

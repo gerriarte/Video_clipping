@@ -50,11 +50,12 @@ try:
     from modules.renderer    import render_clips, speaker_follow, clip_aspect
     from modules.caption_gen import generate_all_captions
     from modules.transcriber import transcribe_video
-    from modules.postiz      import PostizClient, build_posts_for_clip, maybe_upload_cover, to_utc_iso, PLATFORM_CAPTION_FIELD
     from modules.peaks       import compute_peaks
     from modules.proxy       import ensure_proxy, proxy_path_for
     from modules.media_server import MediaServer
     from modules.segment_preview import analyze_segment
+    from modules.library    import find_videos, label_for
+    from modules.imaging    import imread
     from modules.settings   import (
         load_settings, save_settings, settings_exist,
         env_read, env_upsert, mask_key,
@@ -400,7 +401,7 @@ def _clip_frames_bgr(clip: dict) -> list:
             capture_output=True,
         )
         if tmp.exists():
-            img = cv2.imread(str(tmp))
+            img = imread(str(tmp))
             if img is not None:
                 imgs.append(img)
             try:
@@ -738,7 +739,8 @@ def build_csv(clips: list, video_info: dict) -> str:
             "clip_title":        clip.get("title", ""),
             "start":             clip.get("start", ""),
             "end":               clip.get("end", ""),
-            "duration":          f"{clip.get('end',0) - clip.get('start',0):.1f}",
+            # La real: con jump cuts el archivo dura menos que end - start.
+            "duration":          f"{clip.get('clip_duration') or (clip.get('end', 0) - clip.get('start', 0)):.1f}",
             "type":              clip.get("type", ""),
             "reason":            clip.get("reason", ""),
             "serie":             serie,
@@ -848,10 +850,11 @@ def header(stage: str) -> None:
 # estado del pipeline, que se copian y se comparten sin pensarlo.
 
 _CH_FIELDS = {
-    "ch_name":  "channel_name",
-    "ch_desc":  "channel_desc",
-    "ch_hosts": "channel_hosts",
-    "ch_tone":  "channel_tone",
+    "ch_name":      "channel_name",
+    "ch_desc":      "channel_desc",
+    "ch_hosts":     "channel_hosts",
+    "ch_tone":      "channel_tone",
+    "material_dir": "material_dir",
 }
 
 
@@ -903,6 +906,18 @@ def setup_screen() -> None:
         key="setup_ch_tone",
         placeholder="Ej: Relajado pero profesional, con insights accionables",
     )
+
+    material = st.text_input(
+        "Carpeta donde están tus videos",
+        value=st.session_state.get("material_dir") or config.MATERIAL_DIR,
+        key="setup_material_dir",
+        help="Desde acá se listan los archivos al elegir «Archivo local». "
+             "Puede ser cualquier carpeta del disco.",
+    )
+    if material and not Path(material).is_dir():
+        st.caption("⚠️ Esa carpeta no existe todavía.")
+    else:
+        st.caption(f"{len(find_videos(material))} videos encontrados.")
 
     st.divider()
     st.markdown("**¿Con qué modelo trabajás?**")
@@ -967,6 +982,7 @@ def setup_screen() -> None:
             os.environ["ANTHROPIC_API_KEY"] = key_nueva.strip()
 
         st.session_state.ch_name  = nombre
+        st.session_state.material_dir = material
         st.session_state.ch_desc  = desc
         st.session_state.ch_hosts = hosts
         st.session_state.ch_tone  = tono
@@ -976,6 +992,7 @@ def setup_screen() -> None:
             "channel_desc":  desc,
             "channel_hosts": hosts,
             "channel_tone":  tono,
+            "material_dir":  material,
             "llm_provider":  prov,
             "claude_model":  st.session_state.get("setup_claude_model") or config.CLAUDE_MODEL,
             "ollama_model":  st.session_state.get("setup_ollama_model") or config.OLLAMA_MODEL,
@@ -1061,16 +1078,39 @@ if st.session_state.stage == "idle":
     col_input, col_btn = st.columns([6, 1.5])
 
     with col_input:
-        _placeholder = (
-            "https://youtube.com/watch?v=..."
-            if _is_youtube else
-            r"C:\Videos\mi_video.mp4"
-        )
-        _input_val = st.text_input(
-            "Entrada",
-            placeholder=_placeholder,
-            label_visibility="collapsed",
-        )
+        if _is_youtube:
+            _input_val = st.text_input(
+                "Entrada",
+                placeholder="https://youtube.com/watch?v=...",
+                label_visibility="collapsed",
+            )
+        else:
+            # El archivo está en el disco de esta misma máquina, así que un
+            # file_uploader significaría subir varios GB por HTTP para dejarlos
+            # donde ya estaban. Se listan los que hay y se elige.
+            _material = find_videos(config.MATERIAL_DIR)
+            _OTRA = "Otra ruta…"
+            _opciones = [label_for(v) for v in _material] + [_OTRA]
+            _elegido = st.selectbox(
+                "Archivo local",
+                options=_opciones,
+                index=0 if _material else len(_opciones) - 1,
+                label_visibility="collapsed",
+            )
+            if _elegido == _OTRA:
+                _input_val = st.text_input(
+                    "Ruta del archivo",
+                    placeholder=r"C:\Videos\mi_video.mp4",
+                    label_visibility="collapsed",
+                )
+            else:
+                _input_val = _material[_opciones.index(_elegido)]["path"]
+
+            if not _material:
+                st.caption(
+                    f"No hay videos en `{config.MATERIAL_DIR}`. Cambiá la carpeta "
+                    "en ⚙ Ajustes, o pegá la ruta acá arriba."
+                )
 
     with col_btn:
         _btn_label = "▶ Descargar" if _is_youtube else "📂 Cargar"
@@ -1747,210 +1787,3 @@ if st.session_state.stage == "captioned":
             use_container_width=True,
         )
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # PASO 6 — Programar en Postiz
-    # ══════════════════════════════════════════════════════════════════════════
-    st.divider()
-    st.subheader("📤 Paso 6 — Programar en Postiz")
-
-    if not config.POSTIZ_API_KEY:
-        st.info(
-            "Configurá `POSTIZ_API_KEY` y `POSTIZ_API_URL` en el `.env` para "
-            "programar las publicaciones desde acá."
-        )
-    else:
-        _PLATS = list(PLATFORM_CAPTION_FIELD)  # tiktok, instagram, youtube
-
-        c1, c2, c3 = st.columns([1.2, 1, 1])
-        with c1:
-            start_date = st.date_input(
-                "Fecha del 1er post",
-                value=(datetime.now() + timedelta(days=1)).date(),
-                key="pz_date",
-            )
-        with c2:
-            start_time = st.time_input("Hora", value=_time(9, 0), key="pz_time")
-        with c3:
-            interval_h = st.number_input(
-                "Horas entre clips", min_value=0.0, value=24.0, step=1.0, key="pz_interval"
-            )
-
-        c4, c5 = st.columns([2, 1])
-        with c4:
-            sel_plats = st.multiselect(
-                "Plataformas", _PLATS, default=_PLATS, key="pz_plats"
-            )
-        with c5:
-            post_type = st.selectbox(
-                "Modo", ["schedule", "draft", "now"], key="pz_type",
-                help="schedule = programado · draft = borrador para revisar en Postiz · now = publicar ya",
-            )
-
-        start_dt = datetime.combine(start_date, start_time)
-
-        if sel_plats:
-            # Horarios base: escalonado desde el 1er post según el intervalo.
-            auto_times = [
-                start_dt + timedelta(hours=interval_h * i)
-                for i in range(len(final_clips))
-            ]
-
-            manual = st.toggle(
-                "Editar fecha/hora por post",
-                key="pz_manual",
-                help="Activalo para fijar el día y la hora de cada clip por separado "
-                     "(así decidís cuántos posts por día). Los valores arrancan desde "
-                     "la fecha/hora y el intervalo de arriba.",
-            )
-
-            # Identidad estable de cada clip (su video de salida es único). La usamos
-            # para recordar cuáles ya se programaron y traerlos destildados.
-            def _clip_key(c):
-                return str(c.get("output_path") or c.get("clip_path") or c.get("title") or "")
-
-            scheduled = st.session_state.setdefault("pz_scheduled", set())
-
-            sched_df = pd.DataFrame({
-                # Por defecto se marcan los que aún NO se programaron.
-                "Programar": [_clip_key(c) not in scheduled for c in final_clips],
-                "Estado":    ["✅ programado" if _clip_key(c) in scheduled else "—"
-                              for c in final_clips],
-                "Clip":      [c.get("title", "") for c in final_clips],
-                "Cuándo":    auto_times,
-                "Plataformas": [
-                    ", ".join(
-                        p for p in sel_plats
-                        if (c.get("captions", {}).get(p) or "").strip()
-                    )
-                    for c in final_clips
-                ],
-            })
-
-            # "Cuándo" editable solo en modo manual; el resto siempre de solo lectura.
-            disabled_cols = ["Estado", "Clip", "Plataformas"] + ([] if manual else ["Cuándo"])
-            edited = st.data_editor(
-                sched_df,
-                key="pz_sched_editor",
-                use_container_width=True,
-                hide_index=True,
-                disabled=disabled_cols,
-                column_config={
-                    "Programar": st.column_config.CheckboxColumn(
-                        "Programar",
-                        help="Destildá los que ya programaste para no duplicarlos.",
-                    ),
-                    "Cuándo": st.column_config.DatetimeColumn(
-                        "Cuándo", format="YYYY-MM-DD HH:mm", step=60, required=True
-                    ),
-                },
-            )
-            schedule_times = [pd.Timestamp(x).to_pydatetime() for x in edited["Cuándo"]]
-            sel_mask       = list(edited["Programar"])
-
-            n_sel = sum(bool(x) for x in sel_mask)
-            if scheduled:
-                cc1, cc2 = st.columns([3, 1])
-                cc1.caption(f"☑️ {n_sel} marcados · ✅ {len(scheduled)} ya programados en esta sesión.")
-                if cc2.button("↺ Reset marcas", key="pz_reset_sched",
-                              help="Olvida qué se programó y vuelve a marcar todos."):
-                    st.session_state["pz_scheduled"] = set()
-                    st.session_state.pop("pz_sched_editor", None)
-                    st.rerun()
-
-            n_req = n_sel * 2
-            if post_type != "draft" and n_req > 30:
-                st.warning(
-                    f"Son ~{n_req} requests y Postiz limita a 30/hora. "
-                    "Programá por tandas o subí el intervalo."
-                )
-
-            def _run_postiz(items, post_type):
-                """
-                items: lista de (clip, when). Programa cada uno y devuelve
-                (ok, failed) donde failed es [{clip, when, error}] para reintentar.
-                """
-                client   = PostizClient()
-                channels = client.channel_map()
-                usables  = [p for p in sel_plats if p in channels]
-                faltan   = [p for p in sel_plats if p not in channels]
-                if faltan:
-                    st.write(f"⚠️ Sin canal conectado para: {faltan} (se omiten).")
-                if not usables:
-                    raise RuntimeError("Ninguna plataforma elegida tiene canal en Postiz.")
-
-                prog = st.progress(0.0)
-                ok = 0
-                failed = []
-                total = len(items)
-                for i, (clip, when) in enumerate(items):
-                    title = clip.get("title", f"clip {i+1}")
-                    vid   = Path(str(clip.get("output_path", clip.get("clip_path", ""))))
-                    try:
-                        if not vid.exists():
-                            raise FileNotFoundError(f"video no encontrado ({vid.name})")
-                        media       = client.upload(vid)
-                        cover_media = maybe_upload_cover(client, clip, usables)  # solo YouTube
-                        posts       = build_posts_for_clip(clip, channels, media, usables, cover_media=cover_media)
-                        if cover_media:
-                            st.write(f"🖼️ {title}: portada adjuntada al Short de YouTube")
-                        if not posts:
-                            st.write(f"⚠️ {title}: sin captions para las plataformas elegidas.")
-                            prog.progress((i + 1) / total)
-                            continue
-                        client.create_post(posts, to_utc_iso(when), post_type=post_type)
-                        st.write(f"✅ {title} → {when:%Y-%m-%d %H:%M} ({len(posts)} canales)")
-                        # Recordamos que este clip ya salió: la tabla lo destilda solo.
-                        st.session_state["pz_scheduled"].add(_clip_key(clip))
-                        ok += 1
-                    except Exception as ce:
-                        st.write(f"❌ {title}: {ce}")
-                        failed.append({"clip": clip, "when": when, "error": str(ce)})
-                    prog.progress((i + 1) / total)
-                return ok, failed
-
-            btn_label = f"📤 Programar {n_sel} en Postiz" if n_sel else "📤 Programar en Postiz"
-            if st.button(btn_label, type="primary", disabled=not sel_plats or n_sel == 0):
-                with st.status("Programando en Postiz…", expanded=True) as s:
-                    try:
-                        # Solo los clips tildados en la tabla.
-                        items = [
-                            (final_clips[i], schedule_times[i])
-                            for i in range(len(final_clips)) if sel_mask[i]
-                        ]
-                        ok, failed = _run_postiz(items, post_type)
-                        st.session_state["pz_failed"] = failed
-                        # Refrescamos la tabla para reflejar lo recién programado.
-                        st.session_state.pop("pz_sched_editor", None)
-                        verbo = "publicados" if post_type == "now" else "programados"
-                        s.update(
-                            label=f"✅ {ok} {verbo}" + (f", {len(failed)} con error" if failed else ""),
-                            state="complete" if not failed else "error",
-                        )
-                    except Exception as e:
-                        s.update(label="❌ Error al programar en Postiz", state="error")
-                        st.session_state["_last_error"] = f"Error Postiz: {e}"
-
-            # Reintento de los posts que fallaron en el último intento. Muchos
-            # fallos son cortes de red transitorios (ConnectionReset 10054): el
-            # cliente ya reintenta por su cuenta, y desde acá podés reintentar los
-            # que aun así quedaron afuera sin volver a tocar los que ya salieron.
-            pz_failed = st.session_state.get("pz_failed") or []
-            if pz_failed:
-                st.warning(f"⚠️ {len(pz_failed)} post(s) quedaron con error:")
-                for f in pz_failed:
-                    st.write(f"• **{f['clip'].get('title', '')}** — {f['error']}")
-                if st.button("🔁 Reintentar fallidos", key="pz_retry", disabled=not sel_plats):
-                    with st.status("Reintentando…", expanded=True) as s:
-                        try:
-                            items = [(f["clip"], f["when"]) for f in pz_failed]
-                            ok, failed = _run_postiz(items, post_type)
-                            st.session_state["pz_failed"] = failed
-                            st.session_state.pop("pz_sched_editor", None)
-                            verbo = "publicados" if post_type == "now" else "programados"
-                            s.update(
-                                label=f"✅ {ok} {verbo}" + (f", {len(failed)} aún con error" if failed else ""),
-                                state="complete" if not failed else "error",
-                            )
-                        except Exception as e:
-                            s.update(label="❌ Error al reintentar en Postiz", state="error")
-                            st.session_state["_last_error"] = f"Error Postiz: {e}"

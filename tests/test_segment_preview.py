@@ -1,5 +1,7 @@
 """Análisis de la toma del tramo: composición en el tiempo y formato sugerido."""
 
+import json
+
 from modules.segment_preview import (
     is_mixed,
     pick_thumbs,
@@ -217,3 +219,42 @@ def test_el_tramo_solo_trae_una_posicion():
 def test_sin_timeline_no_hay_tramos():
     assert shot_segments([], duration=30.0) == []
     assert shot_segments(timeline("111"), duration=0) == []
+
+
+# ── Caché de caras en disco ───────────────────────────────────────────────────
+# Contexto: `cv2.imread` no abría rutas con acentos en Windows, así que todo
+# episodio con una tilde en el título quedó cacheado con cero caras. Arreglar la
+# lectura no alcanzaba: había que invalidar lo guardado.
+
+def test_cache_viejo_sin_version_se_descarta(tmp_path):
+    """El formato viejo era una lista pelada, y puede tener ceros por el bug."""
+    from modules.segment_preview import _load_faces_cache
+    p = tmp_path / "faces.json"
+    p.write_text(json.dumps([[], [], []]), encoding="utf-8")
+    assert _load_faces_cache(p, 3) is None
+
+
+def test_cache_de_la_version_actual_se_usa(tmp_path):
+    from modules.segment_preview import (
+        FACES_CACHE_VERSION, _load_faces_cache, _save_faces_cache,
+    )
+    p = tmp_path / "faces.json"
+    caras = [[{"cx": 0.5, "cy": 0.5, "w": 0.1, "h": 0.1}], []]
+    _save_faces_cache(p, caras)
+    assert json.loads(p.read_text(encoding="utf-8"))["v"] == FACES_CACHE_VERSION
+    assert _load_faces_cache(p, 2) == caras
+
+
+def test_cache_con_otra_cantidad_de_frames_se_descarta(tmp_path):
+    from modules.segment_preview import _load_faces_cache, _save_faces_cache
+    p = tmp_path / "faces.json"
+    _save_faces_cache(p, [[], []])
+    assert _load_faces_cache(p, 5) is None
+
+
+def test_cache_roto_no_rompe(tmp_path):
+    from modules.segment_preview import _load_faces_cache
+    p = tmp_path / "faces.json"
+    p.write_text("{esto no es json", encoding="utf-8")
+    assert _load_faces_cache(p, 1) is None
+    assert _load_faces_cache(tmp_path / "no-existe.json", 1) is None

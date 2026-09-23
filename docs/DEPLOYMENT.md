@@ -51,15 +51,13 @@ Todas se leen en `config.py`. Ver `.env.example` para la plantilla completa.
 | `OLLAMA_TIMEOUT` | no | `600` | Segundos |
 | `OLLAMA_TEMPERATURE` | no | `0.3` | Temperatura de extracción |
 | `OLLAMA_NUM_CTX_ANALYZE` | no | `32768` | Ventana de contexto del análisis |
-| `POSTIZ_API_URL` | no | `https://redes.abralatam.com/api/public/v1` | Base de la API de Postiz (self-hosted termina en `/api/public/v1`) |
-| `POSTIZ_API_KEY` | no | — | Habilita el Paso 6 (programar publicaciones) |
 
 ---
 
 ## Funcionalidades opcionales
 
-Estas dos son **add-ons opcionales**: un despliegue mínimo funciona sin ellas y la
-app no se rompe si no están configuradas. En el entorno del autor quedan **activas**.
+Es un **add-on opcional**: un despliegue mínimo funciona sin él y la app no se
+rompe si no está configurado.
 
 ### LLM local (Ollama) — alternativa a Claude
 Permite hacer el análisis y los captions con un modelo local (gratis, privado, sin
@@ -71,17 +69,6 @@ internet) en vez de la API de Claude. Se elige con `LLM_PROVIDER`:
 Para un despliegue que solo use Claude, no hace falta instalar ni configurar nada
 de Ollama: se deja `LLM_PROVIDER=anthropic`.
 
-### Postiz — programar publicaciones
-Integración con Postiz (gestor de redes self-hosted) para programar/publicar los
-clips en TikTok/Instagram/YouTube desde el "Paso 6" de la app. Es **opcional**:
-- Sin `POSTIZ_API_KEY`, el Paso 6 simplemente no se activa (el resto del flujo —
-  descargar, cortar, formatear, captions, CSV — funciona igual).
-- Para habilitarlo: setear `POSTIZ_API_URL` (self-hosted termina en
-  `/api/public/v1`) y `POSTIZ_API_KEY`.
-
-> Nota: estas dos features viven en parte en archivos que pueden no estar en el
-> commit base (`modules/llm.py`, refinamientos de `modules/postiz.py`). Si un
-> despliegue las necesita, asegurate de que esos archivos estén versionados.
 
 ---
 

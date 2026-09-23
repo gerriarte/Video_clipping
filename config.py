@@ -50,6 +50,10 @@ OLLAMA_NUM_CTX_ANALYZE = int(os.environ.get("OLLAMA_NUM_CTX_ANALYZE", "32768"))
 BASE_DIR      = Path(__file__).parent
 DOWNLOADS_DIR = BASE_DIR / "downloads"
 CLIPS_DIR     = BASE_DIR / "clips"
+
+# Dónde busca la app los videos para cargar desde disco. Se configura en Ajustes;
+# el default es donde ya caen las descargas.
+MATERIAL_DIR  = os.environ.get("ZUMO_MATERIAL_DIR", "") or str(BASE_DIR / "downloads")
 OUTPUT_DIR    = BASE_DIR / "output"
 REMOTION_DIR  = BASE_DIR / "remotion"
 MODELS_DIR    = BASE_DIR / "models"
@@ -195,16 +199,14 @@ def apply_settings(data: dict) -> None:
     Los módulos leen `config.X` cada vez que trabajan, así que reasignar acá
     alcanza y no hace falta reiniciar la app.
     """
-    global LLM_PROVIDER, CLAUDE_MODEL, OLLAMA_MODEL, ANTHROPIC_API_KEY
+    global LLM_PROVIDER, CLAUDE_MODEL, OLLAMA_MODEL, ANTHROPIC_API_KEY, MATERIAL_DIR
     if data.get("llm_provider") in ("anthropic", "ollama"):
         LLM_PROVIDER = data["llm_provider"]
     if data.get("claude_model"):
         CLAUDE_MODEL = data["claude_model"]
     if data.get("ollama_model"):
         OLLAMA_MODEL = data["ollama_model"]
+    if data.get("material_dir"):
+        MATERIAL_DIR = data["material_dir"]
     ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", ANTHROPIC_API_KEY)
 
-# ── Postiz (programación de publicaciones) ────────────────────────────────────
-# Self-hosted: la base termina en /api/public/v1. Cloud sería https://api.postiz.com/public/v1
-POSTIZ_API_URL = os.environ.get("POSTIZ_API_URL", "https://redes.abralatam.com/api/public/v1")
-POSTIZ_API_KEY = os.environ.get("POSTIZ_API_KEY", "")

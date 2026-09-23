@@ -31,6 +31,7 @@ OpenCV, layout "fit" seguro.
 import subprocess
 import tempfile
 from pathlib import Path
+from modules.imaging import imread
 
 # ── Umbrales de layout ────────────────────────────────────────────────────────
 # Alto de la cara más grande respecto al alto del frame para considerar "fill".
@@ -610,7 +611,7 @@ def _detect_with_haar(
             frame_png = tmp_dir / f"f{i}.png"
             if not _extract_frame(clip_path, t, frame_png):
                 continue
-            img = cv2.imread(str(frame_png))
+            img = imread(str(frame_png))
             if img is None:
                 continue
             h, w = img.shape[:2]
