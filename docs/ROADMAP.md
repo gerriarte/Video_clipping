@@ -339,10 +339,10 @@ components/clip_editor/
 
 ---
 
-## Track 3 — Animaciones (overlays con Remotion)   ✅ FASES 1 y 2 (2026-09-23)
+## Track 3 — Animaciones (overlays con Remotion)   ✅ COMPLETO (2026-09-23)
 
-Dos capas encima del clip, manejadas por parámetros (sin LLM): el **gancho** y
-la **placa de nombre**. Van como overlay y no como placas concatenadas, así que
+Cuatro capas encima del clip, manejadas por parámetros (sin LLM): el **gancho**,
+la **placa de nombre** y las placas de **apertura** y **cierre**. Van como overlay y no como placas concatenadas, así que
 **no alargan el clip ni obligan a volver a cortar** — solo afectan al render.
 
 ### Lo que hay
@@ -420,13 +420,34 @@ Regenerar en cada movimiento de un control sería insoportable. Entonces:
    lo avisa con los segundos exactos: *"se pisan entre el segundo 3.0 y el
    6.0"*. Es barato avisarlo y carísimo descubrirlo en el render.
 
-### Lo que NO está, y por qué
+### Fase 3 — Las placas de apertura y cierre   ✅ (2026-09-23)
 
-**Intro / outro como placa.** Estaba en el plan y queda afuera de esta fase. Una
-placa a pantalla completa en un clip de 60 s se come los segundos donde se
-decide la retención, que es justo lo que el gancho resuelve sin costar tiempo de
-pantalla. La cañería es la misma (`overlays/types.ts` + una capa más en
-`OverlayLayer`), así que agregarla después es barato si se la quiere igual.
+Estaban descartadas en la fase 1 con este argumento: *una placa a pantalla
+completa en un clip de 60 s se come justo los segundos donde se decide si
+alguien se queda*. El argumento sigue en pie, así que la placa **no tapa el
+video**: lo oscurece lo que se le diga (`dim`, 0,55 por default) y el
+movimiento sigue abajo mientras se lee. Con `dim` en 1 queda la placa opaca de
+toda la vida, para quien la quiera.
+
+- La de **apertura** cuenta desde el frame 0. Al prenderla se propone el nombre
+  del canal como título, que es lo que uno pone ahí casi siempre.
+- La de **cierre** se ancla al **final** del clip, que es lo que uno quiere
+  decir cuando dice "los últimos 3 segundos".
+- Ninguna alarga el clip: siguen siendo overlays.
+
+**Un bug que encontró el preview, no el render.** La placa de cierre salía
+vacía en el preview: `overlay_preview` no mandaba `durationInFrames`, así que la
+composición calculaba la duración leyendo el archivo entero (64 s) y anclaba la
+placa contra un final que no era el del clip (8 s). En el render nunca pasó —
+`render_clip` sí lo manda— pero el preview mentía. Para eso sirve mirar.
+
+**El aviso de choque** ahora cubre dos casos: el gancho "abajo" contra la placa
+de nombre, y la placa de apertura contra el gancho (las dos ocupan el centro en
+los primeros segundos). Dice los números: *"La placa de apertura dura 2.0 s y el
+gancho arranca en 0.2 s: se superponen."*
+
+Verificado con un render de verdad de 8 s: segundo 1 con la apertura, segundo 4
+limpio, segundo 7,2 con el cierre.
 
 ### Dónde vive cada cosa
 
@@ -434,7 +455,7 @@ pantalla. La cañería es la misma (`overlays/types.ts` + una capa más en
 |---|---|
 | `remotion/src/overlays/types.ts` | el contrato (tiempos en segundos, que es lo que edita una persona) |
 | `remotion/src/overlays/theme.ts` | fuente, acento, zonas seguras, la envolvente de entrada/salida |
-| `remotion/src/overlays/HookTitle.tsx` · `LowerThird.tsx` | las capas |
+| `remotion/src/overlays/HookTitle.tsx` · `LowerThird.tsx` · `Card.tsx` | las capas |
 | `remotion/src/overlays/OverlayLayer.tsx` | las compone; `null` si no hay nada |
 | `remotion/src/ClipComposition.tsx` | `ClipBody` resuelve el video y el recorte; la exportada lo envuelve con las capas **una sola vez**, para no repetirlas en cada rama de layout |
 | `modules/overlays.py` | defaults, validación, recorte de tiempos a la duración del clip |

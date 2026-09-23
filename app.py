@@ -395,7 +395,13 @@ def overlay_preview_panel(clip: dict) -> None:
                 momentos.append((h["start"] + h["dur"] / 2, "Gancho"))
             if "lower" in capas:
                 l = capas["lower"]
-                momentos.append((l["start"] + l["dur"] / 2, "Placa"))
+                momentos.append((l["start"] + l["dur"] / 2, "Nombre"))
+            if "intro" in capas:
+                momentos.append((capas["intro"]["dur"] / 2, "Apertura"))
+            if "outro" in capas:
+                # La de cierre se ancla al final, así que su momento también.
+                _dur_clip = clip.get("clip_duration") or (clip["end"] - clip["start"])
+                momentos.append((_dur_clip - capas["outro"]["dur"] / 2, "Cierre"))
             with st.spinner(f"Renderizando {len(momentos)} frame(s)…"):
                 for i, (seg, etiqueta) in enumerate(momentos):
                     destino = _PREVIEW_DIR / f"{idx}_{i}.jpg"
@@ -505,6 +511,44 @@ def overlay_controls(clip: dict) -> None:
                                ("start", _s), ("dur", _d)):
                 if lower[clave] != val:
                     lower[clave] = val; cambio = True
+
+    st.divider()
+    col_i, col_o = st.columns(2)
+
+    for col, clave, titulo_ui, ayuda, semilla in (
+        (col_i, "intro", "🎬 Placa de apertura",
+         "Un título sobre los primeros segundos. No tapa el video: lo oscurece.",
+         st.session_state.get("ch_name", "")),
+        (col_o, "outro", "🏁 Placa de cierre",
+         "Lo mismo, anclado al final del clip.",
+         ""),
+    ):
+        card = capas[clave]
+        with col:
+            _on = st.checkbox(titulo_ui, value=card["on"], key=f"ov_{clave}_on_{idx}",
+                              help=ayuda)
+            if _on != card["on"]:
+                card["on"] = _on
+                # Al prenderla por primera vez se propone el nombre del canal:
+                # es lo que uno pone ahí el 90% de las veces.
+                if _on and not card["title"] and semilla:
+                    card["title"] = semilla
+                cambio = True
+            if _on:
+                _tit = st.text_input("Título", value=card["title"],
+                                     key=f"ov_{clave}_tit_{idx}")
+                _sub = st.text_input("Bajada", value=card["subtitle"],
+                                     key=f"ov_{clave}_sub_{idx}",
+                                     placeholder="opcional")
+                _c1, _c2 = st.columns(2)
+                _d = _c1.number_input("Dura (s)", 0.3, 15.0, float(card["dur"]), 0.1,
+                                      key=f"ov_{clave}_d_{idx}")
+                _dim = _c2.slider("Oscurece el video", 0.0, 1.0, float(card["dim"]), 0.05,
+                                  key=f"ov_{clave}_dim_{idx}",
+                                  help="0 = se ve el video entero detrás · 1 = placa opaca")
+                for k, v in (("title", _tit), ("subtitle", _sub), ("dur", _d), ("dim", _dim)):
+                    if card[k] != v:
+                        card[k] = v; cambio = True
 
     if cambio:
         clip["overlays"] = capas

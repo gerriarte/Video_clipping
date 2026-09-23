@@ -27,6 +27,17 @@ DEFAULT_HOOK = {
     "dur": 2.6,
 }
 
+# Las placas NO tapan el video por default: `dim` es cuánto se oscurece el
+# fondo, y 0,55 deja ver el movimiento de atrás, que es lo que sostiene la
+# atención mientras se lee. Con 1 se consigue la placa opaca de toda la vida.
+DEFAULT_CARD = {
+    "on": False,
+    "title": "",
+    "subtitle": "",
+    "dur": 2.0,
+    "dim": 0.55,
+}
+
 # La placa entra después del gancho para no pisarlo.
 DEFAULT_LOWER = {
     "on": False,
@@ -110,7 +121,20 @@ def normalize(overlays: dict | None, clip_duration: float | None = None) -> dict
             capa["start"] = min(capa["start"], max(0.0, dur_max - 0.3))
             capa["dur"] = min(capa["dur"], dur_max - capa["start"])
 
-    return {"hook": hook, "lower": lower}
+    cards = {}
+    for clave in ("intro", "outro"):
+        c = {**DEFAULT_CARD, **(overlays.get(clave) or {})}
+        c["on"] = bool(c["on"])
+        c["title"] = str(c.get("title") or "")
+        c["subtitle"] = str(c.get("subtitle") or "")
+        c["dur"] = max(0.3, _num(c.get("dur"), DEFAULT_CARD["dur"]))
+        c["dim"] = min(1.0, max(0.0, _num(c.get("dim"), DEFAULT_CARD["dim"])))
+        if dur_max > 0:
+            # Una placa más larga que el clip taparía el clip entero.
+            c["dur"] = min(c["dur"], dur_max)
+        cards[clave] = c
+
+    return {"hook": hook, "lower": lower, **cards}
 
 
 def for_render(clip: dict) -> dict | None:
@@ -130,7 +154,14 @@ def for_render(clip: dict) -> dict | None:
         capas["hook"]["text"].strip() or str(clip.get("title") or "").strip()
     )
     lower_util = capas["lower"]["on"] and bool(capas["lower"]["name"].strip())
-    if not hook_util and not lower_util:
+
+    # Una placa sin título no tiene nada que mostrar (a diferencia del gancho,
+    # no tiene de dónde sacar un texto).
+    cards_utiles = {
+        k: capas[k] for k in ("intro", "outro")
+        if capas[k]["on"] and capas[k]["title"].strip()
+    }
+    if not hook_util and not lower_util and not cards_utiles:
         return None
 
     salida = {}
@@ -138,6 +169,7 @@ def for_render(clip: dict) -> dict | None:
         salida["hook"] = capas["hook"]
     if lower_util:
         salida["lower"] = capas["lower"]
+    salida.update(cards_utiles)
     return salida
 
 
@@ -151,20 +183,35 @@ def collision(clip: dict) -> str | None:
     descubrirlo en el render.
     """
     capas = for_render(clip)
-    if not capas or "hook" not in capas or "lower" not in capas:
-        return None
-    if capas["hook"]["position"] != "bottom":
+    if not capas:
         return None
 
-    h, l = capas["hook"], capas["lower"]
-    desde = max(h["start"], l["start"])
-    hasta = min(h["start"] + h["dur"], l["start"] + l["dur"])
-    if hasta <= desde:
+    avisos = []
+
+    # El gancho abajo y la placa de nombre se apoyan los dos justo arriba de la
+    # zona que tapa la interfaz de la app.
+    h, l = capas.get("hook"), capas.get("lower")
+    if h and l and h["position"] == "bottom":
+        desde = max(h["start"], l["start"])
+        hasta = min(h["start"] + h["dur"], l["start"] + l["dur"])
+        if hasta > desde:
+            avisos.append(
+                f"El gancho abajo y la placa de nombre se pisan entre el segundo "
+                f"{desde:.1f} y el {hasta:.1f}."
+            )
+
+    # La placa de apertura ocupa el centro desde el frame 0; el gancho suele
+    # estar ahí en el mismo momento.
+    intro = capas.get("intro")
+    if h and intro and h["start"] < intro["dur"]:
+        avisos.append(
+            f"La placa de apertura dura {intro['dur']:.1f} s y el gancho arranca en "
+            f"{h['start']:.1f} s: se superponen."
+        )
+
+    if not avisos:
         return None
-    return (
-        f"El gancho abajo y la placa se pisan entre el segundo {desde:.1f} y el "
-        f"{hasta:.1f}. Movelo arriba, o corré uno de los dos en el tiempo."
-    )
+    return " ".join(avisos) + " Corré uno en el tiempo, o movelo de lugar."
 
 
 def describe(clip: dict) -> str:

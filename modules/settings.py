@@ -21,10 +21,9 @@ SETTINGS_FILE = Path(os.environ.get("ZUMO_SETTINGS_FILE", BASE_DIR / "settings.j
 ENV_FILE = Path(os.environ.get("ZUMO_ENV_FILE", BASE_DIR / ".env"))
 
 # Si algo de esto aparece en el dict de settings, `save_settings` lo rechaza: es
-# la red que evita que una key termine en un archivo que se comparte. POSTIZ_API_KEY
-# sigue en la lista aunque la integración se haya sacado, porque el .env de quien
-# venga usando esto desde antes la tiene igual.
-SECRET_KEYS = ("ANTHROPIC_API_KEY", "POSTIZ_API_KEY")
+# la red que evita que una key termine en un archivo que se comparte. Al agregar
+# una integración nueva con credenciales, su variable va acá.
+SECRET_KEYS = ("ANTHROPIC_API_KEY",)
 
 DEFAULTS = {
     "channel_name": "",

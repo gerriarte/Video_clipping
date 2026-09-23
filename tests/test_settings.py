@@ -2,8 +2,8 @@
 Tests de la configuración del usuario.
 
 Lo que importa acá es que escribir la API key no rompa el `.env`: ese archivo
-también tiene POSTIZ_API_KEY y la URL del servidor, y reescribirlo mal deja la
-app sin publicar sin decir por qué.
+puede tener otras variables, y reescribirlo mal se las lleva puestas sin decir
+por qué.
 """
 
 import json
@@ -57,11 +57,11 @@ def test_guardar_ignora_claves_desconocidas(tmp_path):
     assert "cualquier_cosa" not in json.loads(p.read_text(encoding="utf-8"))
 
 
-@pytest.mark.parametrize("secreto", ["ANTHROPIC_API_KEY", "POSTIZ_API_KEY"])
-def test_guardar_rechaza_secretos(tmp_path, secreto):
+def test_guardar_rechaza_secretos(tmp_path):
     """settings.json se copia y se comparte; una key no puede terminar ahí."""
     with pytest.raises(ValueError, match="secreto"):
-        save_settings({"channel_name": "Zumo", secreto: "sk-ant-loquesea"}, tmp_path / "s.json")
+        save_settings({"channel_name": "Zumo", "ANTHROPIC_API_KEY": "sk-ant-loquesea"},
+                      tmp_path / "s.json")
 
 
 # ── .env ──────────────────────────────────────────────────────────────────────
@@ -70,8 +70,8 @@ _ENV_EJEMPLO = """\
 # Configuración de Zumo
 ANTHROPIC_API_KEY=vieja
 
-POSTIZ_API_URL=https://redes.abralatam.com/api/public/v1
-POSTIZ_API_KEY=postiz-secreta
+LLM_PROVIDER=anthropic
+OTRA_VARIABLE=no-me-toques
 """
 
 
@@ -82,17 +82,17 @@ def test_upsert_reemplaza_sin_tocar_lo_demas(tmp_path):
     env_upsert("ANTHROPIC_API_KEY", "nueva", p)
 
     assert env_read("ANTHROPIC_API_KEY", p) == "nueva"
-    assert env_read("POSTIZ_API_KEY", p) == "postiz-secreta"
-    assert env_read("POSTIZ_API_URL", p) == "https://redes.abralatam.com/api/public/v1"
+    assert env_read("OTRA_VARIABLE", p) == "no-me-toques"
+    assert env_read("LLM_PROVIDER", p) == "anthropic"
     assert "# Configuración de Zumo" in p.read_text(encoding="utf-8")
 
 
 def test_upsert_agrega_al_final_si_no_estaba(tmp_path):
     p = tmp_path / ".env"
-    p.write_text("POSTIZ_API_KEY=x\n", encoding="utf-8")
+    p.write_text("OTRA_VARIABLE=x\n", encoding="utf-8")
     env_upsert("ANTHROPIC_API_KEY", "nueva", p)
     assert env_read("ANTHROPIC_API_KEY", p) == "nueva"
-    assert env_read("POSTIZ_API_KEY", p) == "x"
+    assert env_read("OTRA_VARIABLE", p) == "x"
 
 
 def test_upsert_crea_el_archivo_si_no_existe(tmp_path):
@@ -122,9 +122,9 @@ def test_upsert_ignora_una_linea_comentada(tmp_path):
 def test_upsert_no_parte_el_archivo_con_un_salto_de_linea(tmp_path):
     """Un valor pegado con un \\n de más convertiría media key en otra variable."""
     p = tmp_path / ".env"
-    env_upsert("ANTHROPIC_API_KEY", "sk-ant\nPOSTIZ_API_KEY=robada", p)
-    assert env_read("POSTIZ_API_KEY", p) == ""
-    assert "robada" in env_read("ANTHROPIC_API_KEY", p)
+    env_upsert("ANTHROPIC_API_KEY", "sk-ant\nOTRA_VARIABLE=colada", p)
+    assert env_read("OTRA_VARIABLE", p) == ""
+    assert "colada" in env_read("ANTHROPIC_API_KEY", p)
 
 
 def test_upsert_rechaza_un_nombre_de_variable_invalido(tmp_path):

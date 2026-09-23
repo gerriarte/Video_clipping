@@ -12,6 +12,7 @@ import React from "react";
 import type { Overlays } from "./types";
 import { HookTitle } from "./HookTitle";
 import { LowerThird } from "./LowerThird";
+import { Card } from "./Card";
 
 export const OverlayLayer: React.FC<{
   overlays?: Overlays;
@@ -19,13 +20,17 @@ export const OverlayLayer: React.FC<{
   fallbackText?: string;
 }> = ({ overlays, fallbackText = "" }) => {
   if (!overlays) return null;
-  const { hook, lower } = overlays;
-  if (!hook?.on && !lower?.on) return null;
+  const { hook, lower, intro, outro } = overlays;
+  if (!hook?.on && !lower?.on && !intro?.on && !outro?.on) return null;
 
   return (
     <>
       {lower?.on && <LowerThird lower={lower} />}
       {hook?.on && <HookTitle hook={hook} fallbackText={fallbackText} />}
+      {/* Las placas van últimas: cuando oscurecen el fondo tienen que quedar
+          por encima de las otras capas, no debajo. */}
+      {intro?.on && <Card card={intro} where="intro" />}
+      {outro?.on && <Card card={outro} where="outro" />}
     </>
   );
 };

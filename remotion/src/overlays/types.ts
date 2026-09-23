@@ -37,9 +37,28 @@ export interface LowerThirdOverlay {
   side: "left" | "right";
 }
 
+/** La placa de apertura o la de cierre. */
+export interface CardOverlay {
+  on: boolean;
+  title: string;
+  subtitle: string;
+  /** Cuánto dura. La de intro cuenta desde el principio; la de cierre, hasta el final. */
+  dur: number;
+  /**
+   * Cuánto se oscurece el video detrás (0 = nada, 1 = negro).
+   *
+   * No es una placa opaca por default a propósito: el movimiento de atrás es lo
+   * que sostiene la atención mientras se lee. Con 1 se consigue la placa de
+   * toda la vida, si se la quiere.
+   */
+  dim: number;
+}
+
 export interface Overlays {
   hook?: HookOverlay;
   lower?: LowerThirdOverlay;
+  intro?: CardOverlay;
+  outro?: CardOverlay;
 }
 
 /** Lo que se dibuja si el clip no trae nada: nada. */

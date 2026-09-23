@@ -575,6 +575,10 @@ def overlay_preview(
         "focusTop":    enc["focus_top"],
         "focusBottom": enc["focus_bottom"],
         "sourceAspect": enc["_aspect"],
+        # Sin esto, la composición calcula la duración leyendo el video, y la
+        # placa de cierre —que se ancla al FINAL— se posiciona contra un final
+        # que no es el del clip. El preview salía sin ella.
+        "durationInFrames": max(1, math.ceil(enc["_dur"] * fps)),
     }
     if enc.get("manual_crops"):
         props["manualCrops"] = enc["manual_crops"]

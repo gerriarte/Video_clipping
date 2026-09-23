@@ -9,6 +9,7 @@ ve nunca, y cada verificación cuesta un render entero.
 import pytest
 
 from modules.overlays import (
+    DEFAULT_CARD,
     DEFAULT_HOOK,
     describe,
     for_render,
@@ -170,3 +171,57 @@ def test_no_avisa_con_una_sola_capa():
     from modules.overlays import collision
     assert collision(_clip(overlays={"hook": {"on": True, "position": "bottom"}})) is None
     assert collision(_clip()) is None
+
+
+# ── Placas de apertura y cierre ───────────────────────────────────────────────
+
+def test_una_placa_sin_titulo_no_se_dibuja():
+    assert for_render(_clip(overlays={"intro": {"on": True, "subtitle": "solo bajada"}})) is None
+
+
+def test_la_placa_de_apertura_viaja_con_su_titulo():
+    capas = for_render(_clip(overlays={"intro": {"on": True, "title": "Zumo Streaming"}}))
+    assert capas["intro"]["title"] == "Zumo Streaming"
+    assert "outro" not in capas          # la apagada no viaja
+
+
+def test_las_dos_placas_a_la_vez():
+    capas = for_render(_clip(overlays={
+        "intro": {"on": True, "title": "Zumo"},
+        "outro": {"on": True, "title": "Seguinos"},
+    }))
+    assert set(capas) == {"intro", "outro"}
+
+
+def test_una_placa_no_puede_durar_mas_que_el_clip():
+    """Duraría todo el clip: sería un video de una placa, no un clip."""
+    capas = normalize({"intro": {"on": True, "title": "x", "dur": 90}}, clip_duration=12)
+    assert capas["intro"]["dur"] <= 12
+
+
+def test_el_oscurecido_se_mantiene_entre_0_y_1():
+    assert normalize({"intro": {"dim": 5}})["intro"]["dim"] == 1.0
+    assert normalize({"intro": {"dim": -3}})["intro"]["dim"] == 0.0
+    assert normalize({"intro": {"dim": "mucho"}})["intro"]["dim"] == DEFAULT_CARD["dim"]
+
+
+def test_por_default_la_placa_deja_ver_el_video():
+    """El movimiento de atrás es lo que sostiene la atención mientras se lee."""
+    assert 0 < DEFAULT_CARD["dim"] < 1
+
+
+def test_avisa_si_la_placa_de_apertura_se_come_al_gancho():
+    from modules.overlays import collision
+    aviso = collision(_clip(overlays={
+        "hook":  {"on": True, "start": 0.5, "dur": 3.0},
+        "intro": {"on": True, "title": "Zumo", "dur": 2.0},
+    }))
+    assert aviso and "apertura" in aviso
+
+
+def test_no_avisa_si_el_gancho_entra_despues_de_la_placa():
+    from modules.overlays import collision
+    assert collision(_clip(overlays={
+        "hook":  {"on": True, "start": 2.5, "dur": 3.0},
+        "intro": {"on": True, "title": "Zumo", "dur": 2.0},
+    })) is None
